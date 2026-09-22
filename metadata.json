@@ -1,0 +1,10 @@
+{
+  "name": "GENDLY- FINALIZADO - VERS1",
+  "description": "MicroSaaS robusto, rápido e intuitivo para gestão multi-empresas com dashboard completo, agendamento, financeiro e controle de acessos.",
+  "requestFramePermissions": [
+    "camera"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
