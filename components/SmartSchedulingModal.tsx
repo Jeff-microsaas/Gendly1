@@ -84,21 +84,46 @@ export const SmartSchedulingModal: React.FC<SmartSchedulingModalProps> = ({
         <div className="p-6 space-y-6 overflow-y-auto max-h-[75vh]">
           {/* Link Box */}
           <div className="space-y-2">
-            <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider">
-              Seu Link Exclusivo de Agendamento
-            </label>
-            <div className="flex items-center gap-2 p-2 bg-purple-50/70 border border-purple-200 rounded-2xl">
-              <div className="p-2 bg-white rounded-xl text-purple-600 shrink-0 shadow-2xs">
+            <div className="flex items-center justify-between">
+              <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider">
+                Seu Link Exclusivo de Agendamento
+              </label>
+              <button
+                type="button"
+                onClick={() => {
+                  onClose();
+                  onOpenPublicBooking();
+                }}
+                className="text-xs font-bold text-purple-600 hover:text-purple-800 hover:underline flex items-center gap-1 cursor-pointer"
+              >
+                <ExternalLink size={13} />
+                <span>Abrir Agendamento</span>
+              </button>
+            </div>
+            
+            <div 
+              onClick={() => {
+                onClose();
+                onOpenPublicBooking();
+              }}
+              title="Clique para abrir e testar a tela de agendamento"
+              className="flex items-center gap-2 p-2.5 bg-purple-50 hover:bg-purple-100/80 border border-purple-200 rounded-2xl cursor-pointer transition-all group"
+            >
+              <div className="p-2 bg-white rounded-xl text-purple-600 shrink-0 shadow-2xs group-hover:scale-105 transition-transform">
                 <LinkIcon size={18} />
               </div>
               <input
                 type="text"
                 readOnly
                 value={bookingUrl}
-                className="w-full bg-transparent text-xs font-bold text-gray-800 outline-none truncate select-all"
+                className="w-full bg-transparent text-xs font-bold text-gray-800 outline-none truncate cursor-pointer select-all"
               />
               <button
-                onClick={handleCopy}
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleCopy();
+                }}
                 className={`px-3 py-2 rounded-xl text-xs font-bold transition-all shrink-0 flex items-center gap-1.5 ${
                   copied
                     ? 'bg-emerald-600 text-white shadow-sm'
@@ -118,24 +143,29 @@ export const SmartSchedulingModal: React.FC<SmartSchedulingModalProps> = ({
                 )}
               </button>
             </div>
+            <p className="text-[11px] text-gray-400">
+              💡 Clique no link acima para abrir a tela imediatamente ou copie para enviar aos seus clientes.
+            </p>
           </div>
 
           {/* Action Buttons */}
           <div className="grid grid-cols-2 gap-3">
             <button
+              type="button"
               onClick={() => {
                 onClose();
                 onOpenPublicBooking();
               }}
-              className="py-3 px-4 rounded-xl border border-purple-200 text-purple-700 font-bold text-xs hover:bg-purple-50 transition-all flex items-center justify-center gap-2"
+              className="py-3.5 px-4 rounded-xl bg-purple-600 hover:bg-purple-700 text-white font-bold text-xs transition-all flex items-center justify-center gap-2 shadow-xs hover:scale-[1.02] active:scale-[0.98]"
             >
               <ExternalLink size={15} />
-              <span>Testar Tela Online</span>
+              <span>Acessar Agendamento</span>
             </button>
 
             <button
+              type="button"
               onClick={handleShareWhatsApp}
-              className="py-3 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs transition-all flex items-center justify-center gap-2 shadow-xs"
+              className="py-3.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs transition-all flex items-center justify-center gap-2 shadow-xs hover:scale-[1.02] active:scale-[0.98]"
             >
               <MessageCircle size={15} />
               <span>Enviar no WhatsApp</span>

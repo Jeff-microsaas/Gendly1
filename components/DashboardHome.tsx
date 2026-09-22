@@ -1,8 +1,9 @@
 
 import React, { useMemo, useState, useEffect } from 'react';
-import { Send, Trash2, MessageCircle, ShoppingBag, AlertCircle, Clock, CheckCircle2, Phone, QrCode, Copy, DollarSign, FileText, X, Receipt, Calendar, ChevronRight, Wallet, BadgeCheck, MoreHorizontal, Edit, ChevronDown, UserPlus, CalendarPlus, Layers, Check, Scissors, Sparkles, Play, ListOrdered, ArrowRight, ZoomIn, Gift, Crown, ShoppingCart, Package, Zap, PlusCircle, AlertTriangle, Lock, Settings } from 'lucide-react';
+import { Send, Trash2, MessageCircle, ShoppingBag, AlertCircle, Clock, CheckCircle2, Phone, QrCode, Copy, DollarSign, FileText, X, Receipt, Calendar, ChevronRight, Wallet, BadgeCheck, MoreHorizontal, Edit, ChevronDown, UserPlus, CalendarPlus, Layers, Check, Scissors, Sparkles, Play, ListOrdered, ArrowRight, ZoomIn, Gift, Crown, ShoppingCart, Package, Zap, PlusCircle, AlertTriangle, Lock, Settings, Bell, BellRing } from 'lucide-react';
 import { Product, Sale, Client, Installment, Appointment, QueueItem, LoyaltyRedemption, Category, PlanType, UserPermissions } from '../types';
 import { QueueOpportunityModal } from './QueueOpportunityModal';
+import { requestNotificationPermission, getNotificationPermissionStatus, triggerSystemNotification } from '../services/notifications';
 
 // --- HELPER FUNCTIONS (Pix & Formatting) ---
 
@@ -761,6 +762,7 @@ export const DashboardHome: React.FC<DashboardHomeProps> = ({
   const [replenishTarget, setReplenishTarget] = useState<Product | null>(null);
   const [isUpgradeModalOpen, setIsUpgradeModalOpen] = useState(false);
   const [isEnableFeatureModalOpen, setIsEnableFeatureModalOpen] = useState(false);
+  const [notifPerm, setNotifPerm] = useState<NotificationPermission>(() => getNotificationPermissionStatus());
 
   const visibleAppointments = useMemo(() => {
     return appointments.filter(apt => 
@@ -982,17 +984,43 @@ export const DashboardHome: React.FC<DashboardHomeProps> = ({
           <h2 className="text-xl md:text-2xl font-bold mb-1 tracking-tight">Próximos Atendimentos</h2>
           <p className="text-white/90 text-sm font-medium">Estes são seus próximos compromissos.</p>
         </div>
-        {onOpenSmartScheduling && (
+
+        <div className="flex flex-wrap items-center gap-2.5 relative z-10">
           <button
             type="button"
-            onClick={onOpenSmartScheduling}
-            className="relative z-10 bg-white/20 hover:bg-white/30 text-white px-4 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center gap-2 backdrop-blur-xs border border-white/20 shadow-xs self-start sm:self-auto hover:scale-105 active:scale-95"
-            title="Abrir e compartilhar link de agendamento online inteligente"
+            onClick={async () => {
+              if (notifPerm === 'granted') {
+                triggerSystemNotification('🔔 Teste de Notificação de Atendimento', {
+                  body: 'Notificações ativas! Você será avisado quando um cliente chegar ou o atendimento iniciar, mesmo com o sistema fechado.',
+                  tag: 'test-manual-alert'
+                });
+              } else {
+                const granted = await requestNotificationPermission();
+                if (granted) {
+                  setNotifPerm('granted');
+                }
+              }
+            }}
+            className="bg-white/20 hover:bg-white/30 text-white px-3.5 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center gap-2 backdrop-blur-xs border border-white/20 shadow-xs hover:scale-105 active:scale-95"
+            title="Receba alertas com som e na área de trabalho quando o atendimento estiver iniciando, mesmo com a tela fechada ou minimizada"
           >
-            <Sparkles size={16} className="text-amber-300" />
-            <span>Link de Agendamento Online</span>
+            <BellRing size={16} className={notifPerm === 'granted' ? "text-emerald-300" : "text-amber-300 animate-bounce"} />
+            <span>{notifPerm === 'granted' ? 'Avisos com Tela Fechada Ativos' : 'Ativar Avisos com Tela Fechada'}</span>
           </button>
-        )}
+
+          {onOpenSmartScheduling && (
+            <button
+              type="button"
+              onClick={onOpenSmartScheduling}
+              className="bg-white/20 hover:bg-white/30 text-white px-4 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center gap-2 backdrop-blur-xs border border-white/20 shadow-xs self-start sm:self-auto hover:scale-105 active:scale-95"
+              title="Abrir e compartilhar link de agendamento online inteligente"
+            >
+              <Sparkles size={16} className="text-amber-300" />
+              <span>Link de Agendamento Online</span>
+            </button>
+          )}
+        </div>
+
         <div className="absolute top-0 right-0 w-48 h-48 bg-white/10 rounded-full blur-3xl -mr-10 -mt-10"></div>
         <div className="absolute bottom-0 left-0 w-32 h-32 bg-black/5 rounded-full blur-2xl -ml-8 -mb-8"></div>
       </div>

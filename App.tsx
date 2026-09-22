@@ -57,6 +57,8 @@ import {
 import { Product, ViewState, Company, User, Client, Sale, Installment, Appointment, Professional, Specialty, QueueItem, LoyaltyRedemption, Promotion, Category, PlanType, UserPermissions } from './types';
 import { 
   db, 
+  onDatabaseChange,
+  DB_TABLES,
   FULL_PERMISSIONS, 
   EMPTY_PERMISSIONS, 
   INITIAL_COMPANIES, 
@@ -71,6 +73,13 @@ import {
   ADMIN_ALANINHA, 
   ADMIN_JEFF 
 } from './services/db';
+import { 
+  initNotificationService, 
+  checkAndNotifyAppointments, 
+  requestNotificationPermission, 
+  getNotificationPermissionStatus, 
+  triggerSystemNotification 
+} from './services/notifications';
 import { DatabaseStatusModal } from './components/DatabaseStatusModal';
 import { DashboardHome } from './components/DashboardHome';
 import { ProductForm } from './components/ProductForm';
@@ -965,6 +974,46 @@ const App: React.FC = () => {
   });
   const [isSmartSchedulingModalOpen, setIsSmartSchedulingModalOpen] = useState(false);
 
+  // Inicializar Service Worker e Notificações do Sistema
+  useEffect(() => {
+    initNotificationService();
+  }, []);
+
+  // Sincronização em tempo real de banco de dados entre abas, janelas e agendamento público
+  useEffect(() => {
+    const unsubscribe = onDatabaseChange((key) => {
+      if (key === DB_TABLES.APPOINTMENTS || key === 'gendly_appointments') {
+        setAppointments(db.appointments.getAll());
+      }
+      if (key === DB_TABLES.CLIENTS || key === 'gendly_clients') {
+        setAllClients(db.clients.getAll());
+      }
+      if (key === DB_TABLES.PRODUCTS || key === 'gendly_products') {
+        setAllProducts(db.products.getAll());
+      }
+      if (key === DB_TABLES.PROFESSIONALS || key === 'gendly_professionals') {
+        setAllProfessionals(db.professionals.getAll());
+      }
+    });
+
+    const handlePopState = () => {
+      const urlParams = new URLSearchParams(window.location.search);
+      const queryBooking = urlParams.get('agendamento') || urlParams.get('booking');
+      if (queryBooking) {
+        setPublicBookingCompanyId(queryBooking);
+      } else {
+        setPublicBookingCompanyId(null);
+      }
+    };
+
+    window.addEventListener('popstate', handlePopState);
+
+    return () => {
+      unsubscribe();
+      window.removeEventListener('popstate', handlePopState);
+    };
+  }, []);
+
   // --- LÓGICA DE ISOLAMENTO DE EMPRESA ---
 
   useEffect(() => {
@@ -1090,18 +1139,23 @@ const App: React.FC = () => {
         const now = new Date();
         const todayStr = new Date().toLocaleDateString('en-CA');
 
-        const confirmedAppointments = appointments.filter(apt => 
+        // Notificações do sistema operacional (Desktop e Mobile com som, mesmo com a tela minimizada/em segundo plano)
+        checkAndNotifyAppointments(appointments, user.companyId, appointmentAlertTime);
+
+        // Alerta visual dentro do sistema (Modal)
+        const activeAppointments = appointments.filter(apt => 
             apt.companyId === user.companyId && 
-            apt.status === 'Confirmado' && 
+            (apt.status === 'Confirmado' || apt.status === 'Pendente') && 
             apt.rawDate === todayStr
         );
 
-        confirmedAppointments.forEach(apt => {
+        activeAppointments.forEach(apt => {
              if (snoozedAlerts[apt.id] && now.getTime() < snoozedAlerts[apt.id]) {
                  return;
              }
 
              const [hours, minutes] = apt.time.split(':').map(Number);
+             if (isNaN(hours) || isNaN(minutes)) return;
              const aptDate = new Date();
              aptDate.setHours(hours, minutes, 0, 0);
 
@@ -1117,7 +1171,7 @@ const App: React.FC = () => {
         });
     };
 
-    const intervalId = setInterval(checkAlerts, 30000);
+    const intervalId = setInterval(checkAlerts, 10000);
     checkAlerts();
     return () => clearInterval(intervalId);
   }, [appointments, appointmentAlertTime, triggeredAlerts, snoozedAlerts, user]);
@@ -2214,7 +2268,15 @@ const App: React.FC = () => {
     return (
       <PublicBookingPage 
         companyId={publicBookingCompanyId} 
-        onExitPreview={() => setPublicBookingCompanyId(null)} 
+        onExitPreview={() => {
+          setPublicBookingCompanyId(null);
+          if (typeof window !== 'undefined' && window.history) {
+            window.history.pushState({}, '', window.location.pathname);
+          }
+        }}
+        onAppointmentCreated={(newApt) => {
+          setAppointments(prev => [newApt, ...prev.filter(a => a.id !== newApt.id)]);
+        }}
       />
     );
   }
@@ -2983,7 +3045,12 @@ const App: React.FC = () => {
           isOpen={isSmartSchedulingModalOpen} 
           onClose={() => setIsSmartSchedulingModalOpen(false)} 
           company={currentCompany} 
-          onOpenPublicBooking={() => setPublicBookingCompanyId(currentCompany.id)} 
+          onOpenPublicBooking={() => {
+            setPublicBookingCompanyId(currentCompany.id);
+            if (typeof window !== 'undefined' && window.history) {
+              window.history.pushState({}, '', '?agendamento=' + currentCompany.id);
+            }
+          }} 
         />
       )}
     </div>

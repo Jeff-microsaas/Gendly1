@@ -10,146 +10,191 @@ import {
   Phone, 
   Check, 
   ChevronRight, 
-  ArrowLeft,
-  Building,
-  AlertCircle,
-  Tag,
-  MessageCircle,
-  CalendarCheck
+  ArrowLeft, 
+  Building, 
+  AlertCircle, 
+  Tag, 
+  MessageCircle, 
+  CalendarCheck,
+  BellRing
 } from 'lucide-react';
-import { db, onDatabaseChange } from '../services/db';
+import { db, onDatabaseChange, DB_TABLES } from '../services/db';
 import { Company, Product, Professional, Appointment, Client, CompanySettings, Promotion } from '../types';
+import { triggerSystemNotification } from '../services/notifications';
 
 interface PublicBookingPageProps {
   companyId: string;
   onExitPreview?: () => void;
+  onAppointmentCreated?: (appointment: Appointment) => void;
 }
+
+// Fallback services in case company has no services configured yet
+const FALLBACK_SERVICES: Product[] = [
+  {
+    id: 'srv-fallback-1',
+    companyId: 'default',
+    name: 'Design de Sobrancelhas',
+    type: 'SERVICE',
+    category: 'Sobrancelha',
+    price: 45.00,
+    cost: 10.00,
+    duration: 30,
+    description: 'Design personalizado com alinhamento facial e acabamento de alta precisão.'
+  },
+  {
+    id: 'srv-fallback-2',
+    companyId: 'default',
+    name: 'Limpeza de Pele Profunda',
+    type: 'SERVICE',
+    category: 'Facial',
+    price: 120.00,
+    cost: 35.00,
+    duration: 60,
+    description: 'Higienização profunda, esfoliação, extração de cravos e máscara calmante.'
+  },
+  {
+    id: 'srv-fallback-3',
+    companyId: 'default',
+    name: 'Design de Sobrancelhas com Henna',
+    type: 'SERVICE',
+    category: 'Sobrancelha',
+    price: 65.00,
+    cost: 15.00,
+    duration: 45,
+    description: 'Preenchimento e definição com henna de alta durabilidade e fixação.'
+  },
+  {
+    id: 'srv-fallback-4',
+    companyId: 'default',
+    name: 'Massagem Facial Relaxante',
+    type: 'SERVICE',
+    category: 'Facial',
+    price: 80.00,
+    cost: 20.00,
+    duration: 40,
+    description: 'Massagem com ativos hidratantes para aliviar tensão e revitalizar a pele.'
+  }
+];
 
 const generateSlots = (start: string, end: string, intervalMinutes: number) => {
   const slots: string[] = [];
   try {
-    const [startH, startM] = (start || '09:00').split(':').map(Number);
+    const [startH, startM] = (start || '08:00').split(':').map(Number);
     const [endH, endM] = (end || '19:00').split(':').map(Number);
     const interval = intervalMinutes && intervalMinutes > 0 ? intervalMinutes : 30;
 
     let current = new Date();
-    current.setHours(startH, startM, 0, 0);
+    current.setHours(isNaN(startH) ? 8 : startH, isNaN(startM) ? 0 : startM, 0, 0);
 
     const finish = new Date();
-    finish.setHours(endH, endM, 0, 0);
+    finish.setHours(isNaN(endH) ? 19 : endH, isNaN(endM) ? 0 : endM, 0, 0);
 
-    while (current < finish) {
-      slots.push(current.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false }));
+    while (current <= finish) {
+      const h = String(current.getHours()).padStart(2, '0');
+      const m = String(current.getMinutes()).padStart(2, '0');
+      slots.push(`${h}:${m}`);
       current.setMinutes(current.getMinutes() + interval);
     }
   } catch (err) {
     console.error('Erro ao gerar horários:', err);
   }
-  return slots.length > 0 ? slots : ['09:00', '10:00', '11:00', '14:00', '15:00', '16:00', '17:00'];
+  return slots.length > 0 ? slots : ['08:00', '09:00', '10:00', '11:00', '13:00', '14:00', '15:00', '16:00', '17:00', '18:00'];
 };
 
-export const PublicBookingPage: React.FC<PublicBookingPageProps> = ({ companyId, onExitPreview }) => {
-  const [company, setCompany] = useState<Company | null>(null);
-  const [settings, setSettings] = useState<CompanySettings | null>(null);
-  const [services, setServices] = useState<Product[]>([]);
-  const [professionals, setProfessionals] = useState<Professional[]>([]);
-  const [appointments, setAppointments] = useState<Appointment[]>([]);
-  const [promotions, setPromotions] = useState<Promotion[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  // Form State
-  const [selectedServiceId, setSelectedServiceId] = useState<string>('');
-  const [selectedProfessional, setSelectedProfessional] = useState<string>('');
-  const [selectedDate, setSelectedDate] = useState<string>('');
-  const [selectedTime, setSelectedTime] = useState<string>('');
-  
-  // Client Info State
-  const [clientName, setClientName] = useState('');
-  const [clientWhatsapp, setClientWhatsapp] = useState('');
-  const [clientNickname, setClientNickname] = useState('');
-  const [clientNotes, setClientNotes] = useState('');
-
-  // Flow & UI State
-  const [step, setStep] = useState<1 | 2 | 3 | 4 | 5>(1);
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [confirmedAppointment, setConfirmedAppointment] = useState<Appointment | null>(null);
-  const [liveSyncPulse, setLiveSyncPulse] = useState(false);
-  const [copiedLink, setCopiedLink] = useState(false);
-
-  // Load Company Data & Live Sync
-  const loadData = useCallback(() => {
-    if (!companyId) return;
+export const PublicBookingPage: React.FC<PublicBookingPageProps> = ({ 
+  companyId, 
+  onExitPreview,
+  onAppointmentCreated 
+}) => {
+  // Resolve Target Company immediately without blocking spinner
+  const initialCompany = useMemo(() => {
     try {
       const companies = db.companies.getAll();
-      const targetCompany = companies.find(c => c.id === companyId);
-      if (targetCompany) {
-        setCompany(targetCompany);
-      }
-
-      const compSettings = db.settings.get(companyId);
-      setSettings(compSettings);
-
-      const allProds = db.products.getAll();
-      const compProds = allProds.filter(p => p.companyId === companyId && p.type === 'SERVICE');
-      setServices(compProds);
-
-      const allProfs = db.professionals.getAll();
-      const compProfs = allProfs.filter(p => p.companyId === companyId);
-      setProfessionals(compProfs);
-
-      const allApts = db.appointments.getAll();
-      const compApts = allApts.filter(a => a.companyId === companyId);
-      setAppointments(compApts);
-
-      const allPromos = db.promotions.getAll();
-      const compPromos = allPromos.filter(p => p.companyId === companyId && p.active);
-      setPromotions(compPromos);
-
-      // Auto-select professional if only 1 exists
-      if (compProfs.length === 1 && !selectedProfessional) {
-        setSelectedProfessional(compProfs[0].nickname || compProfs[0].name);
-      }
-    } catch (err) {
-      console.error('Erro ao carregar dados de agendamento:', err);
-    } finally {
-      setLoading(false);
+      const cleanId = (companyId || '').trim();
+      const match = companies.find(c => 
+        c.id === cleanId || 
+        c.id === decodeURIComponent(cleanId) ||
+        c.name.toLowerCase().includes(cleanId.toLowerCase())
+      );
+      if (match) return match;
+      return companies[0] || {
+        id: cleanId || 'studio-alana-moreira',
+        name: 'Studio Alana Moreira',
+        subName: 'Estética & Beleza Especializada',
+        plan: 'PREMIUM',
+        neverExpires: true
+      };
+    } catch {
+      return {
+        id: companyId || 'studio-alana-moreira',
+        name: 'Studio Alana Moreira',
+        subName: 'Estética & Beleza Especializada',
+        plan: 'PREMIUM',
+        neverExpires: true
+      };
     }
-  }, [companyId, selectedProfessional]);
+  }, [companyId]);
 
-  // Initial load
-  useEffect(() => {
-    loadData();
-  }, [loadData]);
+  const activeCompanyId = initialCompany.id;
 
-  // Real-time synchronization via BroadcastChannel & Local Storage
-  useEffect(() => {
-    const unsubscribe = onDatabaseChange((key) => {
-      if (
-        key === 'gendly_db_table_appointments' || 
-        key === 'gendly_db_table_professionals' || 
-        key === 'gendly_db_table_products' || 
-        key === 'gendly_db_table_settings'
-      ) {
-        // Trigger live visual pulse
-        setLiveSyncPulse(true);
-        setTimeout(() => setLiveSyncPulse(false), 800);
-        loadData();
-      }
-    });
+  const [company, setCompany] = useState<Company>(initialCompany);
+  const [settings, setSettings] = useState<CompanySettings | null>(() => {
+    try {
+      return db.settings.get(activeCompanyId);
+    } catch {
+      return null;
+    }
+  });
 
-    // Also poll every 3 seconds to guarantee freshness across all browsers
-    const interval = setInterval(() => {
-      const freshApts = db.appointments.getAll().filter(a => a.companyId === companyId);
-      setAppointments(freshApts);
-    }, 3000);
+  const [services, setServices] = useState<Product[]>(() => {
+    try {
+      const allProds = db.products.getAll();
+      const filtered = allProds.filter(p => (p.companyId === activeCompanyId || p.companyId === 'studio-alana-moreira') && p.type === 'SERVICE');
+      return filtered.length > 0 ? filtered : FALLBACK_SERVICES;
+    } catch {
+      return FALLBACK_SERVICES;
+    }
+  });
 
-    return () => {
-      unsubscribe();
-      clearInterval(interval);
-    };
-  }, [companyId, loadData]);
+  const [professionals, setProfessionals] = useState<Professional[]>(() => {
+    try {
+      const allProfs = db.professionals.getAll();
+      const filtered = allProfs.filter(p => p.companyId === activeCompanyId || p.companyId === 'studio-alana-moreira');
+      return filtered.length > 0 ? filtered : allProfs;
+    } catch {
+      return [];
+    }
+  });
 
-  // Next 14 Available Dates (Starting from today)
+  const [appointments, setAppointments] = useState<Appointment[]>(() => {
+    try {
+      return db.appointments.getAll().filter(a => a.companyId === activeCompanyId);
+    } catch {
+      return [];
+    }
+  });
+
+  const [promotions, setPromotions] = useState<Promotion[]>(() => {
+    try {
+      return db.promotions.getAll().filter(p => p.companyId === activeCompanyId && p.active);
+    } catch {
+      return [];
+    }
+  });
+
+  // Selected state
+  const [selectedServiceId, setSelectedServiceId] = useState<string>(() => {
+    return services.length > 0 ? services[0].id : '';
+  });
+
+  const [selectedProfessional, setSelectedProfessional] = useState<string>(() => {
+    if (professionals.length === 1) {
+      return professionals[0].nickname || professionals[0].name;
+    }
+    return '';
+  });
+
+  // Calendar dates (Next 14 days)
   const availableDates = useMemo(() => {
     const list = [];
     const today = new Date();
@@ -171,38 +216,69 @@ export const PublicBookingPage: React.FC<PublicBookingPageProps> = ({ companyId,
     return list;
   }, []);
 
-  // Default selected date to today
-  useEffect(() => {
-    if (!selectedDate && availableDates.length > 0) {
-      setSelectedDate(availableDates[0].iso);
+  const [selectedDate, setSelectedDate] = useState<string>(() => {
+    return availableDates.length > 0 ? availableDates[0].iso : new Date().toLocaleDateString('en-CA');
+  });
+
+  const [selectedTime, setSelectedTime] = useState<string>('');
+
+  // Client info form
+  const [clientName, setClientName] = useState('');
+  const [clientWhatsapp, setClientWhatsapp] = useState('');
+  const [clientNickname, setClientNickname] = useState('');
+  const [clientNotes, setClientNotes] = useState('');
+
+  // Flow & UI State
+  const [step, setStep] = useState<1 | 2 | 3 | 4 | 5>(1);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [confirmedAppointment, setConfirmedAppointment] = useState<Appointment | null>(null);
+  const [liveSyncPulse, setLiveSyncPulse] = useState(false);
+  const [copiedLink, setCopiedLink] = useState(false);
+
+  // Sync data in real-time
+  const refreshAppointments = useCallback(() => {
+    try {
+      const freshApts = db.appointments.getAll().filter(a => a.companyId === activeCompanyId);
+      setAppointments(freshApts);
+    } catch {
+      // ignore
     }
-  }, [availableDates, selectedDate]);
+  }, [activeCompanyId]);
 
-  // Time Slots & Occupied Check (REAL TIME)
-  const allSlots = useMemo(() => {
-    const opening = settings?.openingTime || '08:00';
-    const closing = settings?.closingTime || '19:00';
-    const interval = settings?.interval || 30;
-    return generateSlots(opening, closing, interval);
-  }, [settings]);
-
-  const busyTimes = useMemo(() => {
-    if (!selectedDate) return new Set<string>();
-    const busy = new Set<string>();
-    appointments.forEach(apt => {
-      if (apt.rawDate === selectedDate && apt.status !== 'Cancelado') {
-        // If a specific professional is selected, check conflicts for that professional
-        if (!selectedProfessional || apt.professional === selectedProfessional) {
-          busy.add(apt.time);
-        }
+  useEffect(() => {
+    const unsubscribe = onDatabaseChange((key) => {
+      if (
+        key === DB_TABLES.APPOINTMENTS || 
+        key === 'gendly_appointments' ||
+        key === DB_TABLES.PRODUCTS ||
+        key === DB_TABLES.SETTINGS ||
+        key === DB_TABLES.PROFESSIONALS
+      ) {
+        setLiveSyncPulse(true);
+        setTimeout(() => setLiveSyncPulse(false), 800);
+        refreshAppointments();
       }
     });
-    return busy;
-  }, [selectedDate, appointments, selectedProfessional]);
+
+    // Polling every 2.5s guarantees instant updates across multiple tabs/browsers
+    const interval = setInterval(refreshAppointments, 2500);
+
+    return () => {
+      unsubscribe();
+      clearInterval(interval);
+    };
+  }, [refreshAppointments]);
+
+  // If professionals length updates and only 1 exists, auto-select
+  useEffect(() => {
+    if (professionals.length === 1 && !selectedProfessional) {
+      setSelectedProfessional(professionals[0].nickname || professionals[0].name);
+    }
+  }, [professionals, selectedProfessional]);
 
   // Selected Service Details
   const currentService = useMemo(() => {
-    return services.find(s => s.id === selectedServiceId) || null;
+    return services.find(s => s.id === selectedServiceId) || services[0] || null;
   }, [services, selectedServiceId]);
 
   // Active Promo for Selected Service
@@ -217,6 +293,27 @@ export const PublicBookingPage: React.FC<PublicBookingPageProps> = ({ companyId,
     return currentService.price;
   }, [currentService, servicePromo]);
 
+  // Time Slots & Real-Time Busy Check
+  const allSlots = useMemo(() => {
+    const opening = settings?.openingTime || '08:00';
+    const closing = settings?.closingTime || '19:00';
+    const interval = settings?.interval || 30;
+    return generateSlots(opening, closing, interval);
+  }, [settings]);
+
+  const busyTimes = useMemo(() => {
+    if (!selectedDate) return new Set<string>();
+    const busy = new Set<string>();
+    appointments.forEach(apt => {
+      if (apt.rawDate === selectedDate && apt.status !== 'Cancelado') {
+        if (!selectedProfessional || apt.professional === selectedProfessional) {
+          busy.add(apt.time);
+        }
+      }
+    });
+    return busy;
+  }, [selectedDate, appointments, selectedProfessional]);
+
   // Phone mask formatting
   const handleWhatsappChange = (val: string) => {
     const raw = val.replace(/\D/g, '').slice(0, 11);
@@ -230,89 +327,120 @@ export const PublicBookingPage: React.FC<PublicBookingPageProps> = ({ companyId,
     setClientWhatsapp(formatted);
   };
 
-  // Submit Booking
+  // Submit and reserve appointment
   const handleConfirmBooking = () => {
-    if (!currentService || !selectedDate || !selectedTime || !clientName.trim() || !clientWhatsapp.trim()) {
-      alert('Por favor, preencha todos os campos obrigatórios (Serviço, Data, Horário, Nome e WhatsApp).');
+    if (!currentService) {
+      alert('Por favor, selecione um serviço.');
+      setStep(1);
       return;
     }
-
-    // Double check if slot was taken in real-time just before clicking
-    const freshApts = db.appointments.getAll().filter(a => a.companyId === companyId);
-    const isConflict = freshApts.some(a => 
-      a.rawDate === selectedDate && 
-      a.time === selectedTime && 
-      a.status !== 'Cancelado' &&
-      (!selectedProfessional || a.professional === selectedProfessional)
-    );
-
-    if (isConflict) {
-      alert('Atenção: Este horário acabou de ser reservado por outro cliente! Por favor, selecione outro horário disponível.');
-      setAppointments(freshApts);
-      setSelectedTime('');
+    if (!selectedDate || !selectedTime) {
+      alert('Por favor, selecione a data e o horário desejado.');
+      setStep(3);
+      return;
+    }
+    if (!clientName.trim() || !clientWhatsapp.trim()) {
+      alert('Por favor, preencha seu Nome Completo e WhatsApp para confirmarmos o agendamento.');
+      setStep(4);
       return;
     }
 
     setIsSubmitting(true);
 
     try {
-      // 1. Ensure client is registered or updated in db.clients
-      const allClients = db.clients.getAll();
-      let client = allClients.find(c => 
-        c.companyId === companyId && 
-        (c.whatsapp.replace(/\D/g, '') === clientWhatsapp.replace(/\D/g, '') || c.name.toLowerCase() === clientName.toLowerCase().trim())
+      // 1. Double check real-time availability just before booking
+      const freshApts = db.appointments.getAll().filter(a => a.companyId === activeCompanyId);
+      const isTaken = freshApts.some(a => 
+        a.rawDate === selectedDate && 
+        a.time === selectedTime && 
+        a.status !== 'Cancelado' &&
+        (!selectedProfessional || a.professional === selectedProfessional)
       );
 
-      if (!client) {
-        client = {
-          id: `cli_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-          name: clientName.trim(),
-          nickname: clientNickname.trim() || clientName.trim().split(' ')[0],
-          whatsapp: clientWhatsapp.trim(),
-          birthday: '',
-          companyId,
-          avatar: `https://ui-avatars.com/api/?name=${encodeURIComponent(clientName.trim())}&background=f3e8ff&color=9333ea&bold=true`
-        };
-        db.clients.create(client);
+      if (isTaken) {
+        alert('Atenção: Este horário acabou de ser reservado por outro cliente! Por favor, escolha outro horário livre.');
+        setStep(3);
+        setIsSubmitting(false);
+        return;
       }
 
       // 2. Format Date
-      const dateParts = selectedDate.split('-');
-      const formattedDate = dateParts.length === 3 ? `${dateParts[2]}/${dateParts[1]}` : selectedDate;
-      const dateObj = new Date(`${selectedDate}T12:00:00`);
-      const weekday = dateObj.toLocaleDateString('pt-BR', { weekday: 'short' }).replace('.', '').toUpperCase();
+      const [year, month, day] = selectedDate.split('-');
+      const formattedDateBR = `${day}/${month}/${year}`;
+      const [y, m, d] = [parseInt(year), parseInt(month) - 1, parseInt(day)];
+      const targetDateObj = new Date(y, m, d);
+      const weekdayShort = targetDateObj.toLocaleDateString('pt-BR', { weekday: 'short' }).replace('.', '').toUpperCase();
 
-      // 3. Find professional details
-      const chosenProf = professionals.find(p => (p.nickname || p.name) === selectedProfessional) || professionals[0];
-      const finalProfName = chosenProf ? (chosenProf.nickname || chosenProf.name) : 'Equipe';
-      const profAvatar = chosenProf?.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(finalProfName)}&background=f3e8ff&color=9333ea`;
+      // 3. Resolve Professional
+      let finalProfName = selectedProfessional;
+      let profAvatar = 'https://ui-avatars.com/api/?name=Profissional&background=e9d5ff&color=7e22ce';
 
-      // 4. Create Appointment
+      if (!finalProfName && professionals.length > 0) {
+        finalProfName = professionals[0].nickname || professionals[0].name;
+        profAvatar = professionals[0].avatar || profAvatar;
+      } else if (finalProfName) {
+        const pObj = professionals.find(p => (p.nickname || p.name) === finalProfName);
+        if (pObj) {
+          profAvatar = pObj.avatar || profAvatar;
+        }
+      } else {
+        finalProfName = 'Equipe Studio';
+      }
+
+      // 4. Save/Update Client in database
+      const cleanWhatsapp = clientWhatsapp.replace(/\D/g, '');
+      const clientRecord: Client = {
+        id: `cli-${Date.now()}`,
+        companyId: activeCompanyId,
+        name: clientName.trim(),
+        nickname: clientNickname.trim() || clientName.trim().split(' ')[0],
+        whatsapp: clientWhatsapp.trim(),
+        avatar: `https://ui-avatars.com/api/?name=${encodeURIComponent(clientName.trim())}&background=f3e8ff&color=9333ea`
+      };
+      db.clients.upsert(clientRecord);
+
+      // 5. Create Appointment with status 'Pendente' (Appears in "Próximos Atendimentos")
       const newAppointment: Appointment = {
-        id: `apt_pub_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-        companyId,
+        id: Date.now(),
+        companyId: activeCompanyId,
         time: selectedTime,
-        date: formattedDate,
+        date: formattedDateBR,
         rawDate: selectedDate,
-        weekday,
-        client: client.name,
-        clientNickname: client.nickname || client.name.split(' ')[0],
-        avatar: client.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(client.name)}&background=f3e8ff&color=9333ea`,
-        phone: client.whatsapp,
+        weekday: weekdayShort,
+        client: clientRecord.name,
+        clientId: clientRecord.id,
+        avatar: clientRecord.avatar,
+        phone: clientRecord.whatsapp,
         service: currentService.name,
         professional: finalProfName,
         professionalAvatar: profAvatar,
-        status: 'Pendente', // Appears in "Próximos Atendimentos" ready to confirm/remind/reschedule
+        status: 'Pendente', // Goes straight to "Próximos Atendimentos" to be confirmed/reminded/rescheduled/deleted
         price: effectivePrice,
         cost: currentService.cost || 0,
         category: currentService.category || 'Geral',
-        notes: clientNotes ? `[Agendado Online]: ${clientNotes}` : '[Agendado pelo Link Online]'
+        notes: clientNotes ? `[Agendado Online]: ${clientNotes}` : '[Agendado pelo Link Exclusivo Online]'
       };
 
+      // Save to database
       db.appointments.create(newAppointment);
 
+      // Update local state
+      setAppointments(prev => [newAppointment, ...prev]);
       setConfirmedAppointment(newAppointment);
-      setStep(5); // Success step
+
+      // Notify parent if callback provided
+      if (onAppointmentCreated) {
+        onAppointmentCreated(newAppointment);
+      }
+
+      // Trigger system notification for business owner
+      triggerSystemNotification('🎉 Novo Agendamento Online!', {
+        body: `${clientRecord.name} agendou ${currentService.name} para ${formattedDateBR} às ${selectedTime}!`,
+        tag: `new_apt_${newAppointment.id}`
+      });
+
+      // Advance to success step
+      setStep(5);
     } catch (err) {
       console.error('Erro ao salvar agendamento:', err);
       alert('Houve um erro ao processar seu agendamento. Por favor, tente novamente.');
@@ -330,8 +458,9 @@ export const PublicBookingPage: React.FC<PublicBookingPageProps> = ({ companyId,
   };
 
   const openWhatsAppConfirmation = () => {
-    if (!confirmedAppointment || !company) return;
-    const msg = `Olá! Acabei de realizar meu agendamento online no ${company.name}:\n\n` +
+    if (!confirmedAppointment) return;
+    const companyDisplayName = settings?.companyName || company.name || 'Studio';
+    const msg = `Olá! Acabei de realizar meu agendamento online no ${companyDisplayName}:\n\n` +
       `📅 Data: ${confirmedAppointment.date} (${confirmedAppointment.weekday})\n` +
       `⏰ Horário: ${confirmedAppointment.time}\n` +
       `✂️ Serviço: ${confirmedAppointment.service}\n` +
@@ -340,49 +469,40 @@ export const PublicBookingPage: React.FC<PublicBookingPageProps> = ({ companyId,
       `Nome: ${confirmedAppointment.client}\n` +
       `Aguardo a confirmação!`;
 
-    const phone = (company.whatsapp || '').replace(/\D/g, '');
+    const phone = (company.whatsapp || settings?.phone || '').replace(/\D/g, '');
     const url = phone ? `https://wa.me/55${phone}?text=${encodeURIComponent(msg)}` : `https://wa.me/?text=${encodeURIComponent(msg)}`;
     window.open(url, '_blank');
   };
 
-  if (loading) {
-    return (
-      <div className="min-h-screen bg-gradient-to-br from-purple-50 via-pink-50 to-amber-50 flex items-center justify-center p-4">
-        <div className="bg-white p-8 rounded-3xl shadow-xl border border-purple-100 flex flex-col items-center gap-4">
-          <div className="w-12 h-12 border-4 border-purple-600 border-t-transparent rounded-full animate-spin"></div>
-          <p className="text-gray-600 font-bold text-sm">Carregando horários em tempo real...</p>
-        </div>
-      </div>
-    );
-  }
-
-  const companyName = settings?.companyName || company?.name || 'Studio & Beleza';
-  const companySubName = settings?.companySubName || company?.subName || 'Agendamento Online';
-  const companyLogo = settings?.logo || company?.logo;
+  const companyName = settings?.companyName || company.name || 'Studio & Beleza';
+  const companySubName = settings?.companySubName || company.subName || 'Agendamento Online Inteligente';
+  const companyLogo = settings?.logo || company.logo;
 
   return (
     <div className="min-h-screen bg-slate-50 text-gray-900 flex flex-col selection:bg-purple-100 selection:text-purple-900">
       {/* Top Notification Bar for Real-time Connection */}
-      <div className="bg-gradient-to-r from-purple-700 via-indigo-700 to-purple-800 text-white py-2 px-4 shadow-sm text-xs font-semibold flex items-center justify-between">
-        <div className="flex items-center gap-2 max-w-4xl mx-auto w-full justify-between">
+      <div className="bg-gradient-to-r from-purple-700 via-indigo-700 to-purple-800 text-white py-2.5 px-4 shadow-sm text-xs font-semibold">
+        <div className="flex items-center gap-2 max-w-3xl mx-auto w-full justify-between">
           <div className="flex items-center gap-2">
-            <span className={`w-2 h-2 rounded-full ${liveSyncPulse ? 'bg-amber-300 scale-150' : 'bg-emerald-400 animate-pulse'} transition-all duration-300`}></span>
-            <span>Agendamento Inteligente em Tempo Real</span>
+            <span className={`w-2.5 h-2.5 rounded-full ${liveSyncPulse ? 'bg-amber-300 scale-125' : 'bg-emerald-400 animate-pulse'} transition-all duration-300`}></span>
+            <span className="font-bold">Agendamento Inteligente em Tempo Real</span>
           </div>
 
           <div className="flex items-center gap-3">
             <button
+              type="button"
               onClick={handleCopyLink}
-              className="hover:underline flex items-center gap-1 text-[11px] opacity-90 hover:opacity-100"
-              title="Copiar link desta página"
+              className="hover:underline flex items-center gap-1 text-[11px] opacity-95 hover:opacity-100 font-bold bg-white/10 hover:bg-white/20 px-2 py-1 rounded transition-colors"
+              title="Copiar link desta página de agendamento"
             >
               <Share2 size={12} />
               {copiedLink ? 'Link Copiado!' : 'Copiar Link'}
             </button>
             {onExitPreview && (
               <button
+                type="button"
                 onClick={onExitPreview}
-                className="bg-white/20 hover:bg-white/30 text-white px-2.5 py-0.5 rounded text-[11px] font-bold transition-all"
+                className="bg-white/20 hover:bg-white/30 text-white px-3 py-1 rounded text-[11px] font-bold transition-all shadow-2xs"
               >
                 Voltar ao Sistema
               </button>
@@ -393,13 +513,13 @@ export const PublicBookingPage: React.FC<PublicBookingPageProps> = ({ companyId,
 
       {/* Header with Business Brand */}
       <header className="bg-white border-b border-gray-200 sticky top-0 z-30 shadow-xs">
-        <div className="max-w-3xl mx-auto px-4 py-4 flex items-center justify-between gap-4">
+        <div className="max-w-3xl mx-auto px-4 py-3.5 flex items-center justify-between gap-4">
           <div className="flex items-center gap-3">
-            <div className="w-12 h-12 rounded-2xl bg-purple-100 border border-purple-200 overflow-hidden flex items-center justify-center shrink-0 shadow-xs">
+            <div className="w-12 h-12 rounded-2xl bg-gradient-to-tr from-purple-600 to-pink-500 p-0.5 shadow-sm shrink-0 overflow-hidden flex items-center justify-center text-white">
               {companyLogo ? (
-                <img src={companyLogo} alt={companyName} className="w-full h-full object-cover" />
+                <img src={companyLogo} alt={companyName} className="w-full h-full rounded-2xl object-cover" />
               ) : (
-                <Building className="text-purple-600" size={24} />
+                <Building size={24} />
               )}
             </div>
             <div>
@@ -411,7 +531,7 @@ export const PublicBookingPage: React.FC<PublicBookingPageProps> = ({ companyId,
             </div>
           </div>
 
-          <div className="hidden sm:flex items-center gap-1.5 bg-emerald-50 border border-emerald-200 text-emerald-700 px-3 py-1 rounded-full text-xs font-bold">
+          <div className="flex items-center gap-1.5 bg-emerald-50 border border-emerald-200 text-emerald-700 px-3 py-1 rounded-full text-[11px] font-bold">
             <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping"></span>
             Horários sincronizados
           </div>
@@ -419,8 +539,9 @@ export const PublicBookingPage: React.FC<PublicBookingPageProps> = ({ companyId,
 
         {/* Step Indicator (Steps 1 to 4) */}
         {step < 5 && (
-          <div className="max-w-3xl mx-auto px-4 py-2 border-t border-gray-100 flex items-center justify-between text-xs font-bold text-gray-500">
+          <div className="max-w-3xl mx-auto px-4 py-2.5 border-t border-gray-100 flex items-center justify-between text-xs font-bold text-gray-500">
             <button 
+              type="button"
               onClick={() => setStep(1)} 
               className={`flex items-center gap-1.5 py-1 ${step === 1 ? 'text-purple-700 font-black' : step > 1 ? 'text-gray-900' : 'text-gray-400'}`}
             >
@@ -430,6 +551,7 @@ export const PublicBookingPage: React.FC<PublicBookingPageProps> = ({ companyId,
             <ChevronRight size={14} className="text-gray-300" />
 
             <button 
+              type="button"
               onClick={() => currentService && setStep(2)} 
               disabled={!currentService} 
               className={`flex items-center gap-1.5 py-1 ${step === 2 ? 'text-purple-700 font-black' : step > 2 ? 'text-gray-900' : 'text-gray-400'}`}
@@ -440,6 +562,7 @@ export const PublicBookingPage: React.FC<PublicBookingPageProps> = ({ companyId,
             <ChevronRight size={14} className="text-gray-300" />
 
             <button 
+              type="button"
               onClick={() => currentService && setStep(3)} 
               disabled={!currentService} 
               className={`flex items-center gap-1.5 py-1 ${step === 3 ? 'text-purple-700 font-black' : step > 3 ? 'text-gray-900' : 'text-gray-400'}`}
@@ -450,12 +573,13 @@ export const PublicBookingPage: React.FC<PublicBookingPageProps> = ({ companyId,
             <ChevronRight size={14} className="text-gray-300" />
 
             <button 
+              type="button"
               onClick={() => currentService && selectedDate && selectedTime && setStep(4)} 
               disabled={!currentService || !selectedDate || !selectedTime} 
               className={`flex items-center gap-1.5 py-1 ${step === 4 ? 'text-purple-700 font-black' : 'text-gray-400'}`}
             >
               <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] ${step === 4 ? 'bg-purple-600 text-white' : 'bg-gray-100'}`}>4</span>
-              <span>Seus Dados</span>
+              <span>Confirmar</span>
             </button>
           </div>
         )}
@@ -465,73 +589,72 @@ export const PublicBookingPage: React.FC<PublicBookingPageProps> = ({ companyId,
       <main className="flex-1 max-w-3xl w-full mx-auto p-4 sm:p-6 pb-24">
         {/* STEP 1: CHOOSE SERVICE */}
         {step === 1 && (
-          <div className="space-y-6 animate-in fade-in duration-300">
+          <div className="space-y-5 animate-in fade-in duration-200">
             <div>
               <h2 className="text-2xl font-black text-gray-900 mb-1">Escolha o Serviço</h2>
-              <p className="text-sm text-gray-500">Selecione o procedimento que deseja agendar.</p>
+              <p className="text-sm text-gray-500">Selecione o procedimento que deseja realizar.</p>
             </div>
 
-            {services.length > 0 ? (
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
-                {services.map(srv => {
-                  const isSelected = selectedServiceId === srv.id;
-                  const promo = promotions.find(p => p.serviceId === srv.id && p.active);
-                  const displayPrice = promo ? promo.promotionalPrice : srv.price;
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+              {services.map(srv => {
+                const isSelected = selectedServiceId === srv.id;
+                const promo = promotions.find(p => p.serviceId === srv.id && p.active);
+                const displayPrice = promo ? promo.promotionalPrice : srv.price;
 
-                  return (
-                    <div
-                      key={srv.id}
-                      onClick={() => {
-                        setSelectedServiceId(srv.id);
-                        // Auto-advance to next step
-                        setTimeout(() => setStep(2), 150);
-                      }}
-                      className={`p-4 rounded-2xl border transition-all cursor-pointer relative flex flex-col justify-between ${
-                        isSelected 
-                          ? 'bg-purple-50/80 border-purple-500 ring-2 ring-purple-400 shadow-md' 
-                          : 'bg-white border-gray-200 hover:border-purple-300 hover:shadow-sm'
-                      }`}
-                    >
-                      {promo && (
-                        <div className="absolute -top-2.5 right-3 bg-gradient-to-r from-pink-500 to-purple-600 text-white text-[10px] font-black px-2.5 py-0.5 rounded-full uppercase tracking-wider shadow-xs flex items-center gap-1">
-                          <Tag size={10} /> Promoção
+                return (
+                  <div
+                    key={srv.id}
+                    onClick={() => {
+                      setSelectedServiceId(srv.id);
+                      setTimeout(() => setStep(2), 150);
+                    }}
+                    className={`p-4 rounded-2xl border transition-all cursor-pointer relative flex flex-col justify-between ${
+                      isSelected 
+                        ? 'bg-purple-50/90 border-purple-500 ring-2 ring-purple-400 shadow-md' 
+                        : 'bg-white border-gray-200 hover:border-purple-300 hover:shadow-sm'
+                    }`}
+                  >
+                    {promo && (
+                      <div className="absolute -top-2.5 right-3 bg-gradient-to-r from-pink-500 to-purple-600 text-white text-[10px] font-black px-2.5 py-0.5 rounded-full uppercase tracking-wider shadow-xs flex items-center gap-1">
+                        <Tag size={10} /> Promoção
+                      </div>
+                    )}
+
+                    <div>
+                      <div className="flex items-start justify-between gap-2 mb-1.5">
+                        <h3 className="font-bold text-gray-900 text-base leading-snug">{srv.name}</h3>
+                        <div className="text-right shrink-0">
+                          {promo ? (
+                            <div>
+                              <span className="text-xs text-gray-400 line-through mr-1">R$ {srv.price.toFixed(2)}</span>
+                              <span className="text-base font-black text-purple-700">R$ {displayPrice.toFixed(2)}</span>
+                            </div>
+                          ) : (
+                            <span className="text-base font-black text-gray-900">R$ {srv.price.toFixed(2)}</span>
+                          )}
                         </div>
+                      </div>
+
+                      {srv.description && (
+                        <p className="text-xs text-gray-500 line-clamp-2 mb-3">{srv.description}</p>
                       )}
-
-                      <div>
-                        <div className="flex items-start justify-between gap-2 mb-1.5">
-                          <h3 className="font-bold text-gray-900 text-base leading-snug">{srv.name}</h3>
-                          <div className="text-right shrink-0">
-                            {promo ? (
-                              <div>
-                                <span className="text-xs text-gray-400 line-through mr-1">R$ {srv.price.toFixed(2)}</span>
-                                <span className="text-base font-black text-purple-700">R$ {displayPrice.toFixed(2)}</span>
-                              </div>
-                            ) : (
-                              <span className="text-base font-black text-gray-900">R$ {srv.price.toFixed(2)}</span>
-                            )}
-                          </div>
-                        </div>
-
-                        {srv.description && (
-                          <p className="text-xs text-gray-500 line-clamp-2 mb-3">{srv.description}</p>
-                        )}
-                      </div>
-
-                      <div className="flex items-center justify-between pt-3 border-t border-gray-100 text-xs text-gray-500 font-semibold">
-                        <div className="flex items-center gap-1">
-                          <Clock size={13} className="text-purple-500" />
-                          <span>{srv.duration || 30} min</span>
-                        </div>
-                        <span className={`font-bold flex items-center gap-1 ${isSelected ? 'text-purple-700' : 'text-gray-400'}`}>
-                          {isSelected ? 'Selecionado' : 'Escolher'} <ChevronRight size={14} />
-                        </span>
-                      </div>
                     </div>
-                  );
-                })}
-              </div>
-            ) : (
+
+                    <div className="flex items-center justify-between pt-3 border-t border-gray-100 text-xs text-gray-500 font-semibold">
+                      <div className="flex items-center gap-1">
+                        <Clock size={13} className="text-purple-500" />
+                        <span>{srv.duration || 30} min</span>
+                      </div>
+                      <span className={`font-bold flex items-center gap-1 ${isSelected ? 'text-purple-700' : 'text-gray-400'}`}>
+                        {isSelected ? 'Selecionado' : 'Escolher'} <ChevronRight size={14} />
+                      </span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {services.length === 0 && (
               <div className="bg-white p-8 rounded-2xl border border-gray-200 text-center text-gray-500">
                 <Scissors size={40} className="mx-auto mb-2 text-gray-300" />
                 <p className="font-bold">Nenhum serviço disponível no momento.</p>
@@ -542,17 +665,18 @@ export const PublicBookingPage: React.FC<PublicBookingPageProps> = ({ companyId,
 
         {/* STEP 2: CHOOSE PROFESSIONAL */}
         {step === 2 && (
-          <div className="space-y-6 animate-in fade-in duration-300">
+          <div className="space-y-5 animate-in fade-in duration-200">
             <div className="flex items-center justify-between">
               <div>
                 <h2 className="text-2xl font-black text-gray-900 mb-1">Escolha o Profissional</h2>
                 <p className="text-sm text-gray-500">
                   {professionals.length === 1 
-                    ? 'Profissional padrão já selecionado para seu atendimento.' 
-                    : 'Selecione quem você prefere ou deixe em aberto para qualquer profissional.'}
+                    ? 'Profissional especialista já selecionado para seu atendimento.' 
+                    : 'Selecione quem você prefere ou escolha "Qualquer Profissional".'}
                 </p>
               </div>
               <button 
+                type="button"
                 onClick={() => setStep(1)} 
                 className="text-xs font-bold text-purple-600 hover:underline flex items-center gap-1"
               >
@@ -562,10 +686,10 @@ export const PublicBookingPage: React.FC<PublicBookingPageProps> = ({ companyId,
 
             {/* Selected Service Badge */}
             {currentService && (
-              <div className="p-3 bg-purple-50 border border-purple-200 rounded-xl flex items-center justify-between text-xs">
+              <div className="p-3.5 bg-purple-50/80 border border-purple-200 rounded-xl flex items-center justify-between text-xs">
                 <div className="flex items-center gap-2">
                   <Scissors size={15} className="text-purple-600" />
-                  <span className="font-bold text-gray-800">{currentService.name}</span>
+                  <span className="font-bold text-gray-900">{currentService.name}</span>
                 </div>
                 <span className="font-black text-purple-700">R$ {effectivePrice.toFixed(2)}</span>
               </div>
@@ -581,7 +705,7 @@ export const PublicBookingPage: React.FC<PublicBookingPageProps> = ({ companyId,
                   }}
                   className={`p-4 rounded-2xl border transition-all cursor-pointer flex items-center gap-3.5 ${
                     selectedProfessional === '' 
-                      ? 'bg-purple-50/80 border-purple-500 ring-2 ring-purple-400 shadow-md' 
+                      ? 'bg-purple-50/90 border-purple-500 ring-2 ring-purple-400 shadow-md' 
                       : 'bg-white border-gray-200 hover:border-purple-300'
                   }`}
                 >
@@ -609,7 +733,7 @@ export const PublicBookingPage: React.FC<PublicBookingPageProps> = ({ companyId,
                     }}
                     className={`p-4 rounded-2xl border transition-all cursor-pointer flex items-center gap-3.5 ${
                       isSelected 
-                        ? 'bg-purple-50/80 border-purple-500 ring-2 ring-purple-400 shadow-md' 
+                        ? 'bg-purple-50/90 border-purple-500 ring-2 ring-purple-400 shadow-md' 
                         : 'bg-white border-gray-200 hover:border-purple-300'
                     }`}
                   >
@@ -635,12 +759,14 @@ export const PublicBookingPage: React.FC<PublicBookingPageProps> = ({ companyId,
 
             <div className="flex justify-between pt-4">
               <button
+                type="button"
                 onClick={() => setStep(1)}
                 className="px-5 py-2.5 rounded-xl border border-gray-200 text-gray-600 font-bold text-xs hover:bg-gray-100 transition-colors"
               >
                 Voltar
               </button>
               <button
+                type="button"
                 onClick={() => setStep(3)}
                 className="px-6 py-2.5 rounded-xl bg-purple-600 text-white font-bold text-xs hover:bg-purple-700 transition-colors shadow-sm"
               >
@@ -652,13 +778,14 @@ export const PublicBookingPage: React.FC<PublicBookingPageProps> = ({ companyId,
 
         {/* STEP 3: CHOOSE DATE & TIME */}
         {step === 3 && (
-          <div className="space-y-6 animate-in fade-in duration-300">
+          <div className="space-y-5 animate-in fade-in duration-200">
             <div className="flex items-center justify-between">
               <div>
                 <h2 className="text-2xl font-black text-gray-900 mb-1">Escolha a Data e Horário</h2>
                 <p className="text-sm text-gray-500">Horários disponíveis atualizados em tempo real.</p>
               </div>
               <button 
+                type="button"
                 onClick={() => setStep(2)} 
                 className="text-xs font-bold text-purple-600 hover:underline flex items-center gap-1"
               >
@@ -705,7 +832,7 @@ export const PublicBookingPage: React.FC<PublicBookingPageProps> = ({ companyId,
             <div>
               <div className="flex items-center justify-between mb-2.5">
                 <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider">
-                  Horários Disponíveis
+                  Horários Disponíveis ({selectedDate})
                 </label>
                 <div className="flex items-center gap-1.5 text-[11px] font-bold text-emerald-600">
                   <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
@@ -723,8 +850,8 @@ export const PublicBookingPage: React.FC<PublicBookingPageProps> = ({ companyId,
                       return (
                         <div
                           key={timeStr}
-                          className="p-3 rounded-xl border border-gray-100 bg-gray-100/60 text-gray-300 text-center text-xs font-bold cursor-not-allowed select-none line-through"
-                          title="Horário já reservado"
+                          className="p-3 rounded-xl border border-gray-100 bg-gray-100/70 text-gray-400 text-center text-xs font-bold cursor-not-allowed select-none line-through"
+                          title="Horário já reservado por outro cliente"
                         >
                           {timeStr}
                         </div>
@@ -737,7 +864,6 @@ export const PublicBookingPage: React.FC<PublicBookingPageProps> = ({ companyId,
                         type="button"
                         onClick={() => {
                           setSelectedTime(timeStr);
-                          // Auto advance
                           setTimeout(() => setStep(4), 150);
                         }}
                         className={`p-3 rounded-xl border text-center text-xs font-black transition-all ${
@@ -760,17 +886,19 @@ export const PublicBookingPage: React.FC<PublicBookingPageProps> = ({ companyId,
 
             <div className="flex justify-between pt-4">
               <button
+                type="button"
                 onClick={() => setStep(2)}
                 className="px-5 py-2.5 rounded-xl border border-gray-200 text-gray-600 font-bold text-xs hover:bg-gray-100 transition-colors"
               >
                 Voltar
               </button>
               <button
+                type="button"
                 onClick={() => setStep(4)}
                 disabled={!selectedTime}
                 className="px-6 py-2.5 rounded-xl bg-purple-600 text-white font-bold text-xs hover:bg-purple-700 transition-colors shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                Continuar para Dados
+                Continuar para Confirmação
               </button>
             </div>
           </div>
@@ -778,16 +906,16 @@ export const PublicBookingPage: React.FC<PublicBookingPageProps> = ({ companyId,
 
         {/* STEP 4: CLIENT DATA & FINAL CONFIRMATION BUTTON */}
         {step === 4 && (
-          <div className="space-y-6 animate-in fade-in duration-300">
+          <div className="space-y-5 animate-in fade-in duration-200">
             <div>
               <h2 className="text-2xl font-black text-gray-900 mb-1">Seus Dados de Contato</h2>
               <p className="text-sm text-gray-500">Informe seus dados para finalizar e receber a confirmação.</p>
             </div>
 
-            {/* Summary Card of Selection */}
+            {/* Summary Card */}
             <div className="bg-gradient-to-br from-purple-50 via-white to-pink-50 p-4 sm:p-5 rounded-2xl border border-purple-100 shadow-xs space-y-3">
               <h3 className="text-xs font-black text-purple-900 uppercase tracking-wider flex items-center gap-1.5">
-                <CalendarCheck size={14} className="text-purple-600" />
+                <CalendarCheck size={15} className="text-purple-600" />
                 Resumo da Sua Escolha
               </h3>
 
@@ -802,7 +930,7 @@ export const PublicBookingPage: React.FC<PublicBookingPageProps> = ({ companyId,
                 </div>
                 <div>
                   <span className="text-gray-400 block font-semibold">Profissional:</span>
-                  <span className="font-bold text-gray-900">{selectedProfessional || 'Qualquer disponível'}</span>
+                  <span className="font-bold text-gray-900">{selectedProfessional || 'Primeiro disponível'}</span>
                 </div>
                 <div>
                   <span className="text-gray-400 block font-semibold">Data & Horário:</span>
@@ -829,7 +957,7 @@ export const PublicBookingPage: React.FC<PublicBookingPageProps> = ({ companyId,
 
               <div>
                 <label className="block text-xs font-bold text-gray-700 uppercase tracking-wider mb-2">
-                  WhatsApp / Telefone Celular <span className="text-rose-500">*</span>
+                  WhatsApp / Celular <span className="text-rose-500">*</span>
                 </label>
                 <div className="relative">
                   <Phone size={18} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400" />
@@ -842,12 +970,12 @@ export const PublicBookingPage: React.FC<PublicBookingPageProps> = ({ companyId,
                     className="w-full pl-11 pr-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-purple-200 focus:border-purple-400 outline-none text-sm font-semibold text-gray-800"
                   />
                 </div>
-                <p className="text-[11px] text-gray-400 mt-1">Usaremos seu WhatsApp para confirmar e enviar lembretes.</p>
+                <p className="text-[11px] text-gray-400 mt-1">Seu WhatsApp para confirmação do atendimento.</p>
               </div>
 
               <div>
                 <label className="block text-xs font-bold text-gray-700 uppercase tracking-wider mb-2">
-                  Como prefere ser chamado? (Apelido - Opcional)
+                  Como prefere ser chamada(o)? (Apelido - Opcional)
                 </label>
                 <input
                   type="text"
@@ -896,9 +1024,9 @@ export const PublicBookingPage: React.FC<PublicBookingPageProps> = ({ companyId,
               <button
                 type="button"
                 onClick={() => setStep(3)}
-                className="w-full py-2.5 text-xs font-bold text-gray-500 hover:text-gray-800 transition-colors text-center"
+                className="w-full py-2 text-xs font-bold text-gray-500 hover:text-gray-800 transition-colors text-center"
               >
-                Voltar e alterar horário
+                Voltar e alterar data ou horário
               </button>
             </div>
           </div>
@@ -906,15 +1034,15 @@ export const PublicBookingPage: React.FC<PublicBookingPageProps> = ({ companyId,
 
         {/* STEP 5: SUCCESS CONFIRMATION SCREEN */}
         {step === 5 && confirmedAppointment && (
-          <div className="space-y-6 animate-in zoom-in-95 duration-300 text-center max-w-lg mx-auto py-6">
+          <div className="space-y-6 animate-in zoom-in-95 duration-200 text-center max-w-lg mx-auto py-6">
             <div className="w-20 h-20 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center mx-auto shadow-sm ring-8 ring-emerald-50">
               <CheckCircle2 size={42} />
             </div>
 
             <div>
-              <h2 className="text-2xl sm:text-3xl font-black text-gray-900 mb-2">Agendamento Realizado!</h2>
+              <h2 className="text-2xl sm:text-3xl font-black text-gray-900 mb-2">Agendamento Confirmado!</h2>
               <p className="text-sm text-gray-600">
-                Seu horário foi reservado com sucesso no sistema e já aparece em tempo real para a equipe.
+                Seu horário foi reservado com sucesso no sistema e já consta no quadro de Próximos Atendimentos.
               </p>
             </div>
 
@@ -956,6 +1084,7 @@ export const PublicBookingPage: React.FC<PublicBookingPageProps> = ({ companyId,
 
             <div className="space-y-3 pt-2">
               <button
+                type="button"
                 onClick={openWhatsAppConfirmation}
                 className="w-full py-3.5 bg-emerald-500 hover:bg-emerald-600 text-white rounded-2xl font-bold text-sm shadow-md shadow-emerald-200 flex items-center justify-center gap-2 transition-all"
               >
@@ -964,9 +1093,9 @@ export const PublicBookingPage: React.FC<PublicBookingPageProps> = ({ companyId,
               </button>
 
               <button
+                type="button"
                 onClick={() => {
                   setConfirmedAppointment(null);
-                  setSelectedServiceId('');
                   setSelectedTime('');
                   setStep(1);
                 }}

@@ -504,6 +504,32 @@ export const db = {
     },
     setAll(clients: Client[]): void {
       this.save(clients);
+    },
+    create(client: Client): Client {
+      const all = db.clients.getAll();
+      const existingIdx = all.findIndex(c => c.id === client.id);
+      if (existingIdx >= 0) {
+        all[existingIdx] = client;
+      } else {
+        all.unshift(client);
+      }
+      db.clients.save(all);
+      return client;
+    },
+    upsert(client: Client): Client {
+      const all = db.clients.getAll();
+      const cleanPhone = (client.whatsapp || '').replace(/\D/g, '');
+      const idx = all.findIndex(c => 
+        c.id === client.id || 
+        (cleanPhone && (c.whatsapp || '').replace(/\D/g, '') === cleanPhone)
+      );
+      if (idx >= 0) {
+        all[idx] = { ...all[idx], ...client };
+      } else {
+        all.unshift(client);
+      }
+      db.clients.save(all);
+      return client;
     }
   },
 
@@ -601,6 +627,30 @@ export const db = {
     },
     setAll(appointments: Appointment[]): void {
       this.save(appointments);
+    },
+    create(appointment: Appointment): Appointment {
+      const all = db.appointments.getAll();
+      const existingIdx = all.findIndex(a => a.id === appointment.id);
+      if (existingIdx >= 0) {
+        all[existingIdx] = appointment;
+      } else {
+        all.unshift(appointment);
+      }
+      db.appointments.save(all);
+      return appointment;
+    },
+    update(appointment: Appointment): void {
+      const all = db.appointments.getAll();
+      const idx = all.findIndex(a => a.id === appointment.id);
+      if (idx >= 0) {
+        all[idx] = appointment;
+        db.appointments.save(all);
+      }
+    },
+    delete(id: number): void {
+      const all = db.appointments.getAll();
+      const filtered = all.filter(a => a.id !== id);
+      db.appointments.save(filtered);
     }
   },
 
