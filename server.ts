@@ -355,19 +355,26 @@ app.post('/api/appointments', (req: Request, res: Response) => {
       return res.json({ success: true, ignored: true });
     }
 
+    let finalApt: any;
     // Double check if appointment exists
     const exists = dbStore.appointments.some(a => String(a.id) === aptId);
     if (exists) {
-      dbStore.appointments = dbStore.appointments.map(a => String(a.id) === aptId ? { ...a, ...newApt } : a);
+      dbStore.appointments = dbStore.appointments.map(a => {
+        if (String(a.id) === aptId) {
+          finalApt = { ...a, ...newApt, id: a.id };
+          return finalApt;
+        }
+        return a;
+      });
     } else {
-      // Ensure correct status and attributes
-      const formattedApt = {
+      // Ensure correct status and attributes (agendamentos confirmados pelo link ou sistema)
+      finalApt = {
         ...newApt,
         id: newApt.id || Date.now(),
-        status: newApt.status || 'Pendente',
+        status: newApt.status || 'Confirmado',
         companyId: String(newApt.companyId || '1').trim()
       };
-      dbStore.appointments.unshift(formattedApt);
+      dbStore.appointments.unshift(finalApt);
     }
 
     // If client info included, save/upsert client
@@ -392,11 +399,16 @@ app.post('/api/appointments', (req: Request, res: Response) => {
 
     saveDatabase();
 
-    // Broadcast to SSE clients instantly
-    broadcastSSE('appointment_created', newApt);
+    // Broadcast to SSE clients instantly (0ms latency to all open dashboards and booking links)
+    broadcastSSE('appointment_created', finalApt);
+    broadcastSSE('appointment_updated', finalApt);
     broadcastSSE('database_updated', { appointments: dbStore.appointments });
+    broadcastSSE('booking_data_updated', {
+      companyId: String(finalApt.companyId).trim().toLowerCase(),
+      appointments: dbStore.appointments
+    });
 
-    res.json({ success: true, appointment: newApt });
+    res.json({ success: true, appointment: finalApt });
   } catch (err: any) {
     console.error('[Server DB] Error saving appointment:', err);
     res.status(500).json({ error: 'Erro ao salvar agendamento no servidor' });
@@ -546,7 +558,16 @@ app.post('/api/sync', (req: Request, res: Response) => {
       broadcastSSE('database_updated', {
         appointments: dbStore.appointments,
         products: dbStore.products,
-        professionals: dbStore.professionals
+        professionals: dbStore.professionals,
+        companies: dbStore.companies
+      });
+
+      broadcastSSE('booking_data_updated', {
+        companyId: targetComp || 'all',
+        products: dbStore.products,
+        professionals: dbStore.professionals,
+        appointments: dbStore.appointments,
+        company: targetComp ? dbStore.companies.find(c => String(c.id).trim().toLowerCase() === targetComp) : null
       });
     }
 
