@@ -707,6 +707,7 @@ interface DashboardHomeProps {
   };
   userPermissions: UserPermissions;
   onOpenSmartScheduling?: () => void;
+  onDeleteAppointment?: (id: number) => void;
 }
 
 export const DashboardHome: React.FC<DashboardHomeProps> = ({ 
@@ -722,6 +723,7 @@ export const DashboardHome: React.FC<DashboardHomeProps> = ({
     onNewAppointment, 
     onOpenSmartScheduling,
     onUpdateAppointments, 
+    onDeleteAppointment,
     onConfirmAppointment, 
     onStartAppointment, 
     onFinishSession, 
@@ -764,11 +766,58 @@ export const DashboardHome: React.FC<DashboardHomeProps> = ({
   const [isEnableFeatureModalOpen, setIsEnableFeatureModalOpen] = useState(false);
   const [notifPerm, setNotifPerm] = useState<NotificationPermission>(() => getNotificationPermissionStatus());
 
+  // Função para converter data e horário em timestamp para ordenação cronológica estrita
+  const getAppointmentTimestamp = (apt: Appointment): number => {
+    try {
+      let year = new Date().getFullYear();
+      let month = new Date().getMonth();
+      let day = new Date().getDate();
+
+      if (apt.rawDate) {
+        const parts = apt.rawDate.split('-').map(Number);
+        if (parts.length === 3 && parts[0] > 0) {
+          year = parts[0];
+          month = parts[1] - 1;
+          day = parts[2];
+        }
+      } else if (apt.date) {
+        const parts = apt.date.split(/[/ -]/).map(Number);
+        if (parts.length >= 2) {
+          day = parts[0] || day;
+          month = (parts[1] || 1) - 1;
+          if (parts[2]) {
+            year = parts[2] < 100 ? 2000 + parts[2] : parts[2];
+          }
+        }
+      }
+
+      let hour = 0;
+      let min = 0;
+      if (apt.time) {
+        const timeParts = apt.time.split(':').map(Number);
+        hour = timeParts[0] || 0;
+        min = timeParts[1] || 0;
+      }
+
+      return new Date(year, month, day, hour, min, 0).getTime();
+    } catch {
+      return apt.id || 0;
+    }
+  };
+
   const visibleAppointments = useMemo(() => {
-    return appointments.filter(apt => 
+    return appointments
+      .filter(apt => 
         apt.status !== 'Em Andamento' && 
-        apt.status !== 'Finalizado'
-    );
+        apt.status !== 'Finalizado' &&
+        apt.status !== 'Cancelado'
+      )
+      .sort((a, b) => {
+        const timeA = getAppointmentTimestamp(a);
+        const timeB = getAppointmentTimestamp(b);
+        if (timeA !== timeB) return timeA - timeB;
+        return (a.id || 0) - (b.id || 0);
+      });
   }, [appointments]);
   
   const isSlotInFuture = (dateStr: string, timeStr: string) => {
@@ -839,8 +888,12 @@ export const DashboardHome: React.FC<DashboardHomeProps> = ({
   const handleConfirmDelete = () => {
     if (deleteTargetId) {
         const aptToDelete = appointments.find(a => a.id === deleteTargetId);
-        const updated = appointments.filter(apt => apt.id !== deleteTargetId);
-        onUpdateAppointments(updated);
+        if (onDeleteAppointment) {
+            onDeleteAppointment(deleteTargetId);
+        } else {
+            const updated = appointments.filter(apt => apt.id !== deleteTargetId);
+            onUpdateAppointments(updated);
+        }
         setDeleteTargetId(null);
         if (aptToDelete && queue.length > 0 && isSlotInFuture(aptToDelete.rawDate, aptToDelete.time)) {
             setOpportunitySlot({ date: aptToDelete.rawDate, time: aptToDelete.time });

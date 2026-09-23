@@ -259,12 +259,16 @@ try {
   // BroadcastChannel not supported in current environment
 }
 
-function writeTable<T>(key: string, data: T): void {
+function writeTable<T>(key: string, data: T, broadcast: boolean = true): void {
   try {
     if (typeof window === 'undefined' || typeof localStorage === 'undefined') {
       return;
     }
     localStorage.setItem(key, JSON.stringify(data));
+    localStorage.setItem(`${key}_timestamp`, String(Date.now()));
+    if (!broadcast) {
+      return;
+    }
     try {
       window.dispatchEvent(new CustomEvent('gendly_db_update', { detail: { key, data } }));
       if (realtimeChannel) {
@@ -292,11 +296,18 @@ export function onDatabaseChange(callback: (key: string, data: any) => void): ()
   };
 
   const storageHandler = (e: StorageEvent) => {
-    if (e.key && e.newValue) {
-      try {
-        callback(e.key, JSON.parse(e.newValue));
-      } catch {
-        // ignore
+    if (e.key) {
+      if (e.key.endsWith('_timestamp')) {
+        const baseKey = e.key.replace('_timestamp', '');
+        callback(baseKey, readTable(baseKey, null));
+        return;
+      }
+      if (e.newValue) {
+        try {
+          callback(e.key, JSON.parse(e.newValue));
+        } catch {
+          // ignore
+        }
       }
     }
   };
@@ -335,47 +346,44 @@ export const db = {
       if (!stored) {
         const legacy = readTable<User[] | null>('gendly_users', null);
         stored = legacy || INITIAL_USERS;
+        let list = Array.isArray(stored) ? [...stored] : [...INITIAL_USERS];
+        
+        // Upsert Alaninha - Administradora exclusiva de Studio Alana Moreira
+        const alaninhaIndex = list.findIndex(u => u.username.toLowerCase().trim() === 'alaninha@gmail.com');
+        if (alaninhaIndex >= 0) {
+          list[alaninhaIndex] = {
+            ...list[alaninhaIndex],
+            name: 'Alana Moreira (Administradora)',
+            companyId: 'studio-alana-moreira',
+            password: 'Alaninha@123',
+            role: 'ADMIN',
+            isMaster: false,
+            neverExpires: true,
+            permissions: FULL_PERMISSIONS
+          };
+        } else {
+          list.unshift({ ...ADMIN_ALANINHA });
+        }
+
+        // Upsert Jeff - Master global
+        const jeffIndex = list.findIndex(u => u.username.toLowerCase().trim() === 'jeff@gmail.com');
+        if (jeffIndex >= 0) {
+          list[jeffIndex] = {
+            ...list[jeffIndex],
+            role: 'ADMIN',
+            isMaster: true,
+            neverExpires: true,
+            permissions: FULL_PERMISSIONS
+          };
+        } else {
+          list.push({ ...ADMIN_JEFF });
+        }
+
+        writeTable(DB_TABLES.USERS, list, false);
+        return list;
       }
 
-      // Garantir sempre a administradora Alaninha com senha Alaninha@123 vinculada EXCLUSIVAMENTE ao Studio Alana Moreira
-      const cleanAlaninha = { ...ADMIN_ALANINHA };
-      const cleanJeff = { ...ADMIN_JEFF };
-
-      let list = Array.isArray(stored) ? [...stored] : [...INITIAL_USERS];
-      
-      // Upsert Alaninha - Administradora exclusiva de Studio Alana Moreira
-      const alaninhaIndex = list.findIndex(u => u.username.toLowerCase().trim() === 'alaninha@gmail.com');
-      if (alaninhaIndex >= 0) {
-        list[alaninhaIndex] = {
-          ...list[alaninhaIndex],
-          name: 'Alana Moreira (Administradora)',
-          companyId: 'studio-alana-moreira',
-          password: 'Alaninha@123',
-          role: 'ADMIN',
-          isMaster: false,
-          neverExpires: true,
-          permissions: FULL_PERMISSIONS
-        };
-      } else {
-        list.unshift(cleanAlaninha);
-      }
-
-      // Upsert Jeff - Master global
-      const jeffIndex = list.findIndex(u => u.username.toLowerCase().trim() === 'jeff@gmail.com');
-      if (jeffIndex >= 0) {
-        list[jeffIndex] = {
-          ...list[jeffIndex],
-          role: 'ADMIN',
-          isMaster: true,
-          neverExpires: true,
-          permissions: FULL_PERMISSIONS
-        };
-      } else {
-        list.push(cleanJeff);
-      }
-
-      writeTable(DB_TABLES.USERS, list);
-      return list;
+      return Array.isArray(stored) ? stored : INITIAL_USERS;
     },
     save(users: User[]): void {
       // Assegura integridade e isolamento de Alaninha e Jeff ao salvar
@@ -401,8 +409,8 @@ export const db = {
         list.unshift(ADMIN_ALANINHA);
       }
 
-      writeTable(DB_TABLES.USERS, list);
-      writeTable('gendly_users', list); // retrocompatibilidade
+      writeTable(DB_TABLES.USERS, list, true);
+      writeTable('gendly_users', list, false); // retrocompatibilidade
     },
     setAll(users: User[]): void {
       this.save(users);
@@ -426,26 +434,27 @@ export const db = {
       if (!stored) {
         const legacy = readTable<Company[] | null>('gendly_companies', null);
         stored = legacy || INITIAL_COMPANIES;
-      }
-      let list = Array.isArray(stored) && stored.length > 0 ? [...stored] : [...INITIAL_COMPANIES];
+        let list = Array.isArray(stored) && stored.length > 0 ? [...stored] : [...INITIAL_COMPANIES];
 
-      // Assegurar sempre a existência de Studio Alana Moreira com plano PREMIUM e vitalício
-      const alanaIndex = list.findIndex(c => c.id === 'studio-alana-moreira' || c.name.toLowerCase().includes('alana moreira'));
-      if (alanaIndex >= 0) {
-        list[alanaIndex] = {
-          ...list[alanaIndex],
-          id: 'studio-alana-moreira',
-          name: 'Studio Alana Moreira',
-          subName: list[alanaIndex].subName || 'Estética & Beleza Premium',
-          plan: 'PREMIUM',
-          neverExpires: true
-        };
-      } else {
-        list.unshift(COMPANY_STUDIO_ALANA);
-      }
+        // Assegurar sempre a existência de Studio Alana Moreira com plano PREMIUM e vitalício
+        const alanaIndex = list.findIndex(c => c.id === 'studio-alana-moreira' || c.name.toLowerCase().includes('alana moreira'));
+        if (alanaIndex >= 0) {
+          list[alanaIndex] = {
+            ...list[alanaIndex],
+            id: 'studio-alana-moreira',
+            name: 'Studio Alana Moreira',
+            subName: list[alanaIndex].subName || 'Estética & Beleza Premium',
+            plan: 'PREMIUM',
+            neverExpires: true
+          };
+        } else {
+          list.unshift(COMPANY_STUDIO_ALANA);
+        }
 
-      writeTable(DB_TABLES.COMPANIES, list);
-      return list;
+        writeTable(DB_TABLES.COMPANIES, list, false);
+        return list;
+      }
+      return Array.isArray(stored) && stored.length > 0 ? stored : [...INITIAL_COMPANIES];
     },
     save(companies: Company[]): void {
       let list = [...companies];
@@ -461,8 +470,8 @@ export const db = {
       } else {
         list.unshift(COMPANY_STUDIO_ALANA);
       }
-      writeTable(DB_TABLES.COMPANIES, list);
-      writeTable('gendly_companies', list);
+      writeTable(DB_TABLES.COMPANIES, list, true);
+      writeTable('gendly_companies', list, false);
     },
     setAll(companies: Company[]): void {
       this.save(companies);
@@ -486,21 +495,21 @@ export const db = {
       if (!stored) {
         const legacy = readTable<Client[] | null>('gendly_clients', null);
         stored = legacy || MOCK_CLIENTS;
-      }
-      let list = Array.isArray(stored) ? [...stored] : [...MOCK_CLIENTS];
+        let list = Array.isArray(stored) ? [...stored] : [...MOCK_CLIENTS];
 
-      // Se não houver clientes para Studio Alana Moreira, mesclar os clientes padrão
-      if (!list.some(c => c.companyId === 'studio-alana-moreira')) {
-        const alanaClients = MOCK_CLIENTS.filter(c => c.companyId === 'studio-alana-moreira');
-        list = [...alanaClients, ...list];
-      }
+        if (!list.some(c => c.companyId === 'studio-alana-moreira')) {
+          const alanaClients = MOCK_CLIENTS.filter(c => c.companyId === 'studio-alana-moreira');
+          list = [...alanaClients, ...list];
+        }
 
-      writeTable(DB_TABLES.CLIENTS, list);
-      return list;
+        writeTable(DB_TABLES.CLIENTS, list, false);
+        return list;
+      }
+      return Array.isArray(stored) ? stored : [...MOCK_CLIENTS];
     },
     save(clients: Client[]): void {
-      writeTable(DB_TABLES.CLIENTS, clients);
-      writeTable('gendly_clients', clients);
+      writeTable(DB_TABLES.CLIENTS, clients, true);
+      writeTable('gendly_clients', clients, false);
     },
     setAll(clients: Client[]): void {
       this.save(clients);
@@ -540,21 +549,21 @@ export const db = {
       if (!stored) {
         const legacy = readTable<Product[] | null>('gendly_products', null);
         stored = legacy || MOCK_PRODUCTS;
-      }
-      let list = Array.isArray(stored) ? [...stored] : [...MOCK_PRODUCTS];
+        let list = Array.isArray(stored) ? [...stored] : [...MOCK_PRODUCTS];
 
-      // Se não houver produtos para Studio Alana Moreira, mesclar o catálogo padrão
-      if (!list.some(p => p.companyId === 'studio-alana-moreira')) {
-        const alanaProducts = MOCK_PRODUCTS.filter(p => p.companyId === 'studio-alana-moreira');
-        list = [...alanaProducts, ...list];
-      }
+        if (!list.some(p => p.companyId === 'studio-alana-moreira')) {
+          const alanaProducts = MOCK_PRODUCTS.filter(p => p.companyId === 'studio-alana-moreira');
+          list = [...alanaProducts, ...list];
+        }
 
-      writeTable(DB_TABLES.PRODUCTS, list);
-      return list;
+        writeTable(DB_TABLES.PRODUCTS, list, false);
+        return list;
+      }
+      return Array.isArray(stored) ? stored : [...MOCK_PRODUCTS];
     },
     save(products: Product[]): void {
-      writeTable(DB_TABLES.PRODUCTS, products);
-      writeTable('gendly_products', products);
+      writeTable(DB_TABLES.PRODUCTS, products, true);
+      writeTable('gendly_products', products, false);
     },
     setAll(products: Product[]): void {
       this.save(products);
@@ -568,20 +577,21 @@ export const db = {
       if (!stored) {
         const legacy = readTable<Category[] | null>('gendly_categories', null);
         stored = legacy || MOCK_CATEGORIES;
-      }
-      let list = Array.isArray(stored) ? [...stored] : [...MOCK_CATEGORIES];
+        let list = Array.isArray(stored) ? [...stored] : [...MOCK_CATEGORIES];
 
-      if (!list.some(cat => cat.companyId === 'studio-alana-moreira')) {
-        const alanaCats = MOCK_CATEGORIES.filter(c => c.companyId === 'studio-alana-moreira');
-        list = [...alanaCats, ...list];
-      }
+        if (!list.some(cat => cat.companyId === 'studio-alana-moreira')) {
+          const alanaCats = MOCK_CATEGORIES.filter(c => c.companyId === 'studio-alana-moreira');
+          list = [...alanaCats, ...list];
+        }
 
-      writeTable(DB_TABLES.CATEGORIES, list);
-      return list;
+        writeTable(DB_TABLES.CATEGORIES, list, false);
+        return list;
+      }
+      return Array.isArray(stored) ? stored : [...MOCK_CATEGORIES];
     },
     save(categories: Category[]): void {
-      writeTable(DB_TABLES.CATEGORIES, categories);
-      writeTable('gendly_categories', categories);
+      writeTable(DB_TABLES.CATEGORIES, categories, true);
+      writeTable('gendly_categories', categories, false);
     },
     setAll(categories: Category[]): void {
       this.save(categories);
@@ -595,14 +605,15 @@ export const db = {
       if (!stored) {
         const legacy = readTable<Sale[] | null>('gendly_sales', null);
         stored = legacy || MOCK_SALES;
+        const list = Array.isArray(stored) ? stored : MOCK_SALES;
+        writeTable(DB_TABLES.SALES, list, false);
+        return list;
       }
-      const list = Array.isArray(stored) ? stored : MOCK_SALES;
-      writeTable(DB_TABLES.SALES, list);
-      return list;
+      return Array.isArray(stored) ? stored : MOCK_SALES;
     },
     save(sales: Sale[]): void {
-      writeTable(DB_TABLES.SALES, sales);
-      writeTable('gendly_sales', sales);
+      writeTable(DB_TABLES.SALES, sales, true);
+      writeTable('gendly_sales', sales, false);
     },
     setAll(sales: Sale[]): void {
       this.save(sales);
@@ -613,24 +624,45 @@ export const db = {
   appointments: {
     getAll(): Appointment[] {
       let stored = readTable<Appointment[] | null>(DB_TABLES.APPOINTMENTS, null);
+      let list: Appointment[];
       if (!stored) {
         const legacy = readTable<Appointment[] | null>('gendly_appointments', null);
         stored = legacy || INITIAL_APPOINTMENTS;
+        list = Array.isArray(stored) ? stored : INITIAL_APPOINTMENTS;
+        writeTable(DB_TABLES.APPOINTMENTS, list, false);
+      } else {
+        list = Array.isArray(stored) ? stored : INITIAL_APPOINTMENTS;
       }
-      const list = Array.isArray(stored) ? stored : INITIAL_APPOINTMENTS;
-      writeTable(DB_TABLES.APPOINTMENTS, list);
+
+      try {
+        const raw = localStorage.getItem('gendly_deleted_apt_ids');
+        const deletedIds: string[] = raw ? JSON.parse(raw) : [];
+        if (deletedIds.length > 0) {
+          const set = new Set(deletedIds);
+          return list.filter(a => !set.has(String(a.id)));
+        }
+      } catch {}
+
       return list;
     },
     save(appointments: Appointment[]): void {
-      writeTable(DB_TABLES.APPOINTMENTS, appointments);
-      writeTable('gendly_appointments', appointments);
+      writeTable(DB_TABLES.APPOINTMENTS, appointments, true);
+      writeTable('gendly_appointments', appointments, false);
     },
     setAll(appointments: Appointment[]): void {
       this.save(appointments);
     },
     create(appointment: Appointment): Appointment {
+      try {
+        const raw = localStorage.getItem('gendly_deleted_apt_ids');
+        const deletedIds: string[] = raw ? JSON.parse(raw) : [];
+        if (deletedIds.includes(String(appointment.id))) {
+          return appointment;
+        }
+      } catch {}
+
       const all = db.appointments.getAll();
-      const existingIdx = all.findIndex(a => a.id === appointment.id);
+      const existingIdx = all.findIndex(a => String(a.id) === String(appointment.id));
       if (existingIdx >= 0) {
         all[existingIdx] = appointment;
       } else {
@@ -641,15 +673,24 @@ export const db = {
     },
     update(appointment: Appointment): void {
       const all = db.appointments.getAll();
-      const idx = all.findIndex(a => a.id === appointment.id);
+      const idx = all.findIndex(a => String(a.id) === String(appointment.id));
       if (idx >= 0) {
         all[idx] = appointment;
         db.appointments.save(all);
       }
     },
-    delete(id: number): void {
+    delete(id: number | string): void {
+      try {
+        const raw = localStorage.getItem('gendly_deleted_apt_ids');
+        const deletedIds: string[] = raw ? JSON.parse(raw) : [];
+        if (!deletedIds.includes(String(id))) {
+          deletedIds.push(String(id));
+          localStorage.setItem('gendly_deleted_apt_ids', JSON.stringify(deletedIds));
+        }
+      } catch {}
+
       const all = db.appointments.getAll();
-      const filtered = all.filter(a => a.id !== id);
+      const filtered = all.filter(a => String(a.id) !== String(id));
       db.appointments.save(filtered);
     }
   },
@@ -661,20 +702,21 @@ export const db = {
       if (!stored) {
         const legacy = readTable<Professional[] | null>('gendly_professionals', null);
         stored = legacy || MOCK_PROFESSIONALS;
-      }
-      let list = Array.isArray(stored) ? [...stored] : [...MOCK_PROFESSIONALS];
+        let list = Array.isArray(stored) ? [...stored] : [...MOCK_PROFESSIONALS];
 
-      if (!list.some(p => p.companyId === 'studio-alana-moreira')) {
-        const alanaProfs = MOCK_PROFESSIONALS.filter(p => p.companyId === 'studio-alana-moreira');
-        list = [...alanaProfs, ...list];
-      }
+        if (!list.some(p => p.companyId === 'studio-alana-moreira')) {
+          const alanaProfs = MOCK_PROFESSIONALS.filter(p => p.companyId === 'studio-alana-moreira');
+          list = [...alanaProfs, ...list];
+        }
 
-      writeTable(DB_TABLES.PROFESSIONALS, list);
-      return list;
+        writeTable(DB_TABLES.PROFESSIONALS, list, false);
+        return list;
+      }
+      return Array.isArray(stored) ? stored : [...MOCK_PROFESSIONALS];
     },
     save(professionals: Professional[]): void {
-      writeTable(DB_TABLES.PROFESSIONALS, professionals);
-      writeTable('gendly_professionals', professionals);
+      writeTable(DB_TABLES.PROFESSIONALS, professionals, true);
+      writeTable('gendly_professionals', professionals, false);
     },
     setAll(professionals: Professional[]): void {
       this.save(professionals);
@@ -688,20 +730,21 @@ export const db = {
       if (!stored) {
         const legacy = readTable<Specialty[] | null>('gendly_specialties', null);
         stored = legacy || MOCK_SPECIALTIES;
-      }
-      let list = Array.isArray(stored) ? [...stored] : [...MOCK_SPECIALTIES];
+        let list = Array.isArray(stored) ? [...stored] : [...MOCK_SPECIALTIES];
 
-      if (!list.some(s => s.companyId === 'studio-alana-moreira')) {
-        const alanaSpecs = MOCK_SPECIALTIES.filter(s => s.companyId === 'studio-alana-moreira');
-        list = [...alanaSpecs, ...list];
-      }
+        if (!list.some(s => s.companyId === 'studio-alana-moreira')) {
+          const alanaSpecs = MOCK_SPECIALTIES.filter(s => s.companyId === 'studio-alana-moreira');
+          list = [...alanaSpecs, ...list];
+        }
 
-      writeTable(DB_TABLES.SPECIALTIES, list);
-      return list;
+        writeTable(DB_TABLES.SPECIALTIES, list, false);
+        return list;
+      }
+      return Array.isArray(stored) ? stored : [...MOCK_SPECIALTIES];
     },
     save(specialties: Specialty[]): void {
-      writeTable(DB_TABLES.SPECIALTIES, specialties);
-      writeTable('gendly_specialties', specialties);
+      writeTable(DB_TABLES.SPECIALTIES, specialties, true);
+      writeTable('gendly_specialties', specialties, false);
     },
     setAll(specialties: Specialty[]): void {
       this.save(specialties);

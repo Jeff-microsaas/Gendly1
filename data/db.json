@@ -1,0 +1,193 @@
+{
+  "companies": [
+    {
+      "id": "studio-alana-moreira",
+      "name": "Studio Alana Moreira",
+      "subName": "Estética & Beleza Premium",
+      "logo": "https://ui-avatars.com/api/?name=Studio+Alana+Moreira&background=fdf4ff&color=9333ea",
+      "taxId": "22.222.222/0001-22",
+      "businessType": "PJ",
+      "plan": "PREMIUM",
+      "neverExpires": true,
+      "address": "Av. Paulista, 1000 - Jardins",
+      "whatsapp": "11999998888",
+      "instagram": "@studioalanamoreira"
+    },
+    {
+      "id": "1",
+      "name": "Studio Beleza Pura",
+      "subName": "Estética & Bem-estar",
+      "logo": "https://ui-avatars.com/api/?name=Studio+Beleza+Pura&background=fce7f3&color=db2777",
+      "taxId": "00.000.000/0001-00",
+      "businessType": "PJ",
+      "plan": "PREMIUM",
+      "neverExpires": true,
+      "address": "Rua Oscar Freire, 500 - Cerqueira César",
+      "whatsapp": "11988887777",
+      "instagram": "@belezapura_studio"
+    }
+  ],
+  "products": [
+    {
+      "id": "prod-alana-1",
+      "companyId": "studio-alana-moreira",
+      "name": "Limpeza de Pele Profunda",
+      "price": 180,
+      "cost": 40,
+      "duration": "1h 20m",
+      "category": "Estética Facial",
+      "type": "SERVICE",
+      "subtype": "SINGLE",
+      "description": "Higienização profunda com extração, esfoliação e máscara de alta frequência.",
+      "image": "https://images.unsplash.com/photo-1570172619644-dfd03ed5d881?w=400&q=80"
+    },
+    {
+      "id": "prod-alana-2",
+      "companyId": "studio-alana-moreira",
+      "name": "Design de Sobrancelhas com Henna",
+      "price": 65,
+      "cost": 15,
+      "duration": "45m",
+      "category": "Olhar & Sobrancelhas",
+      "type": "SERVICE",
+      "subtype": "SINGLE",
+      "description": "Mapeamento geométrico facial e aplicação de henna natural.",
+      "image": "https://images.unsplash.com/photo-1522337360788-8b13dee7a37e?w=400&q=80"
+    },
+    {
+      "id": "prod-alana-3",
+      "companyId": "studio-alana-moreira",
+      "name": "Pacote Revitalização Facial (4 Sessões)",
+      "price": 580,
+      "cost": 120,
+      "duration": "1h",
+      "category": "Pacotes",
+      "type": "SERVICE",
+      "subtype": "PACKAGE",
+      "sessionCount": 4,
+      "description": "Tratamento intensivo anti-idade e clareamento facial.",
+      "image": "https://images.unsplash.com/photo-1512290900672-1f5517e4526d?w=400&q=80"
+    },
+    {
+      "id": "1",
+      "companyId": "1",
+      "name": "Protocolo Glow 24k",
+      "price": 450,
+      "cost": 60,
+      "duration": "1h 30m",
+      "category": "Tratamentos Exclusivos",
+      "type": "SERVICE",
+      "subtype": "SINGLE",
+      "description": "Tratamento iluminador com partículas de ouro.",
+      "image": "https://images.unsplash.com/photo-1512290900672-1f5517e4526d?w=400&q=80"
+    },
+    {
+      "id": "2",
+      "companyId": "1",
+      "name": "Essência Floral Rose",
+      "price": 180,
+      "cost": 25,
+      "duration": "1h",
+      "category": "Corporal",
+      "type": "SERVICE",
+      "subtype": "SINGLE",
+      "description": "Óleo essencial de rosas para harmonização e massagem relaxante.",
+      "image": "https://images.unsplash.com/photo-1519823551278-64ac92734fb1?w=400&q=80"
+    },
+    {
+      "id": "3",
+      "companyId": "1",
+      "name": "Corte Bordado",
+      "price": 120,
+      "cost": 20,
+      "duration": "50m",
+      "category": "Cabelos",
+      "type": "SERVICE",
+      "subtype": "SINGLE",
+      "description": "Remoção de pontas duplas sem tirar comprimento do cabelo.",
+      "image": "https://images.unsplash.com/photo-1560066984-138dadb4c035?w=400&q=80"
+    },
+    {
+      "id": "4",
+      "companyId": "1",
+      "name": "Pacote Noiva",
+      "price": 1500,
+      "cost": 300,
+      "duration": "4h",
+      "category": "Pacotes",
+      "type": "SERVICE",
+      "subtype": "PACKAGE",
+      "sessionCount": 3,
+      "description": "Dia completo da noiva com cuidados especiais.",
+      "image": null
+    }
+  ],
+  "professionals": [
+    {
+      "id": "prof-alana-1",
+      "companyId": "studio-alana-moreira",
+      "name": "Alana Moreira",
+      "nickname": "Alana",
+      "specialties": [
+        "Estética Facial",
+        "Design de Sobrancelhas"
+      ],
+      "specialtyId": "spec-alana-1",
+      "avatar": "https://ui-avatars.com/api/?name=Alana+Moreira&background=fdf4ff&color=9333ea",
+      "email": "alana@studioalanamoreira.com",
+      "whatsapp": "11999887766",
+      "role": "Especialista Master",
+      "commission": 100
+    },
+    {
+      "id": "prof-alana-2",
+      "companyId": "studio-alana-moreira",
+      "name": "Camila Rocha",
+      "nickname": "Cami",
+      "specialties": [
+        "Estética Facial",
+        "Spa Facial"
+      ],
+      "specialtyId": "spec-alana-2",
+      "avatar": "https://ui-avatars.com/api/?name=Camila+Rocha&background=fee2e2&color=e11d48",
+      "email": "camila@studioalanamoreira.com",
+      "whatsapp": "11988774433",
+      "role": "Terapeuta Estética",
+      "commission": 60
+    },
+    {
+      "id": "1",
+      "companyId": "1",
+      "name": "Juliana Santos",
+      "nickname": "Ju",
+      "specialties": [
+        "Tratamentos Exclusivos",
+        "Corporal"
+      ],
+      "specialtyId": "1",
+      "avatar": "https://ui-avatars.com/api/?name=Ju&background=f3e8ff&color=9333ea",
+      "email": "juliana@belezapura.com",
+      "whatsapp": "11999990001",
+      "role": "Esteticista Sênior",
+      "commission": 50
+    },
+    {
+      "id": "2",
+      "companyId": "1",
+      "name": "Priscila Alencar",
+      "nickname": "Pri",
+      "specialties": [
+        "Cabelos",
+        "Colorimetria"
+      ],
+      "specialtyId": "2",
+      "avatar": "https://ui-avatars.com/api/?name=Pri&background=ec4899&color=fff",
+      "email": "priscila@belezapura.com",
+      "whatsapp": "11999990002",
+      "role": "Terapeuta Capilar",
+      "commission": 50
+    }
+  ],
+  "appointments": [],
+  "clients": []
+}

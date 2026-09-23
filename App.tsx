@@ -840,7 +840,26 @@ const App: React.FC = () => {
   }, [allCategories]);
 
   useEffect(() => {
-    db.appointments.setAll(appointments);
+    try {
+      const stored = db.appointments.getAll();
+      const currentMap = new Map(appointments.map(a => [String(a.id), a]));
+      let hasExternal = false;
+      const merged = [...appointments];
+      for (const a of stored) {
+        if (!currentMap.has(String(a.id))) {
+          merged.push(a);
+          hasExternal = true;
+        }
+      }
+      if (hasExternal) {
+        setAppointments(merged);
+        db.appointments.save(merged);
+      } else {
+        db.appointments.save(appointments);
+      }
+    } catch {
+      db.appointments.save(appointments);
+    }
   }, [appointments]);
 
   useEffect(() => {
@@ -974,6 +993,24 @@ const App: React.FC = () => {
   });
   const [isSmartSchedulingModalOpen, setIsSmartSchedulingModalOpen] = useState(false);
 
+// Gestão permanente de agendamentos excluídos para evitar qualquer loop de ressurreição
+const getDeletedAptIds = (): Set<string> => {
+  try {
+    const raw = localStorage.getItem('gendly_deleted_apt_ids');
+    return new Set(raw ? JSON.parse(raw) : []);
+  } catch {
+    return new Set();
+  }
+};
+
+const markAptDeleted = (id: string | number) => {
+  try {
+    const s = getDeletedAptIds();
+    s.add(String(id));
+    localStorage.setItem('gendly_deleted_apt_ids', JSON.stringify(Array.from(s)));
+  } catch {}
+};
+
   // Inicializar Service Worker e Notificações do Sistema
   useEffect(() => {
     initNotificationService();
@@ -981,20 +1018,129 @@ const App: React.FC = () => {
 
   // Sincronização em tempo real de banco de dados entre abas, janelas e agendamento público
   useEffect(() => {
-    const unsubscribe = onDatabaseChange((key) => {
+    const syncAllFromDb = async () => {
+      try {
+        const deletedIds = getDeletedAptIds();
+        const freshApts = db.appointments.getAll().filter(a => !deletedIds.has(String(a.id)));
+        setAppointments(prev => {
+          const prevMap = new Map(prev.map(a => [String(a.id), a]));
+          let needsUpdate = false;
+          for (const a of freshApts) {
+            if (!prevMap.has(String(a.id))) {
+              needsUpdate = true;
+              break;
+            }
+          }
+          if (needsUpdate || freshApts.length !== prev.length) {
+            return freshApts;
+          }
+          return prev;
+        });
+
+        // Busca do servidor central para garantir agendamentos feitos por celulares ou outros navegadores
+        const res = await fetch('/api/appointments');
+        if (res.ok) {
+          const serverApts: Appointment[] = await res.json();
+          if (Array.isArray(serverApts) && serverApts.length > 0) {
+            const currentDeletedIds = getDeletedAptIds();
+            setAppointments(prev => {
+              const prevMap = new Map(prev.map(a => [String(a.id), a]));
+              let hasNew = false;
+              const merged = [...prev];
+              for (const a of serverApts) {
+                if (currentDeletedIds.has(String(a.id))) continue; // NUNCA RESSUSCITAR CARD EXCLUÍDO!
+                if (!prevMap.has(String(a.id))) {
+                  merged.unshift(a);
+                  hasNew = true;
+                  db.appointments.create(a);
+                }
+              }
+              return hasNew ? merged : prev;
+            });
+          }
+        }
+      } catch {}
+    };
+
+    // Sincronização em tempo real via Server-Sent Events (SSE)
+    let sseSource: EventSource | null = null;
+    try {
+      sseSource = new EventSource('/api/events');
+      sseSource.addEventListener('appointment_created', (evt: MessageEvent) => {
+        try {
+          const newApt = JSON.parse(evt.data);
+          const currentDeletedIds = getDeletedAptIds();
+          if (newApt && newApt.id && !currentDeletedIds.has(String(newApt.id))) {
+            setAppointments(prev => {
+              if (prev.some(a => String(a.id) === String(newApt.id))) return prev;
+              const updated = [newApt, ...prev];
+              db.appointments.create(newApt);
+              return updated;
+            });
+            triggerSystemNotification('🎉 Novo Agendamento Online Recebido!', {
+              body: `${newApt.client} agendou ${newApt.service} para ${newApt.date} às ${newApt.time}!`,
+              tag: `new_apt_${newApt.id}`
+            });
+          }
+        } catch (e) {
+          console.warn('Erro ao processar evento SSE:', e);
+        }
+      });
+
+      // Escuta evento de exclusão definitiva vindo do servidor
+      sseSource.addEventListener('appointment_deleted', (evt: MessageEvent) => {
+        try {
+          const data = JSON.parse(evt.data);
+          if (data && data.id) {
+            markAptDeleted(data.id);
+            setAppointments(prev => prev.filter(a => String(a.id) !== String(data.id)));
+            const all = db.appointments.getAll().filter(a => String(a.id) !== String(data.id));
+            db.appointments.save(all);
+          }
+        } catch (e) {
+          console.warn('Erro ao processar exclusão SSE:', e);
+        }
+      });
+    } catch {
+      // ignore
+    }
+
+    const unsubscribe = onDatabaseChange((key, data) => {
       if (key === DB_TABLES.APPOINTMENTS || key === 'gendly_appointments') {
-        setAppointments(db.appointments.getAll());
+        if (Array.isArray(data)) {
+          setAppointments(data);
+        } else {
+          setAppointments(db.appointments.getAll());
+        }
       }
       if (key === DB_TABLES.CLIENTS || key === 'gendly_clients') {
-        setAllClients(db.clients.getAll());
+        if (Array.isArray(data)) {
+          setAllClients(data);
+        } else {
+          setAllClients(db.clients.getAll());
+        }
       }
       if (key === DB_TABLES.PRODUCTS || key === 'gendly_products') {
-        setAllProducts(db.products.getAll());
+        if (Array.isArray(data)) {
+          setAllProducts(data);
+        } else {
+          setAllProducts(db.products.getAll());
+        }
       }
       if (key === DB_TABLES.PROFESSIONALS || key === 'gendly_professionals') {
-        setAllProfessionals(db.professionals.getAll());
+        if (Array.isArray(data)) {
+          setAllProfessionals(data);
+        } else {
+          setAllProfessionals(db.professionals.getAll());
+        }
       }
     });
+
+    window.addEventListener('focus', syncAllFromDb);
+    window.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') syncAllFromDb();
+    });
+    const interval = setInterval(syncAllFromDb, 2000);
 
     const handlePopState = () => {
       const urlParams = new URLSearchParams(window.location.search);
@@ -1010,7 +1156,12 @@ const App: React.FC = () => {
 
     return () => {
       unsubscribe();
+      window.removeEventListener('focus', syncAllFromDb);
       window.removeEventListener('popstate', handlePopState);
+      clearInterval(interval);
+      if (sseSource) {
+        sseSource.close();
+      }
     };
   }, []);
 
@@ -1084,10 +1235,22 @@ const App: React.FC = () => {
 
   const currentCompany = useMemo(() => {
     if (!user) return null;
-    if ((user?.username || '').toLowerCase().trim() === 'alaninha@gmail.com') {
-      return companies.find(c => c.id === 'studio-alana-moreira') || companies[0] || null;
+    const cleanUser = (user?.username || '').toLowerCase().trim();
+    if (cleanUser === 'alaninha@gmail.com') {
+      return companies.find(c => c.id === 'studio-alana-moreira') || companies.find(c => c.id === user.companyId) || companies[0] || null;
     }
-    return companies.find(c => c.id === user.companyId) || companies[0] || null;
+    const found = companies.find(c => c.id === user.companyId);
+    if (found) return found;
+    return {
+      id: user.companyId,
+      name: user.name || 'Minha Empresa',
+      subName: 'Estética & Beleza Especializada',
+      logo: `https://ui-avatars.com/api/?name=${encodeURIComponent(user.name || 'Empresa')}&background=7e22ce&color=ffffff`,
+      taxId: '',
+      businessType: 'PJ',
+      plan: 'PREMIUM',
+      neverExpires: true
+    };
   }, [user, companies]);
 
   // Apenas Jeff é Administrador Master Global com permissão de alternar empresas
@@ -1142,10 +1305,10 @@ const App: React.FC = () => {
         // Notificações do sistema operacional (Desktop e Mobile com som, mesmo com a tela minimizada/em segundo plano)
         checkAndNotifyAppointments(appointments, user.companyId, appointmentAlertTime);
 
-        // Alerta visual dentro do sistema (Modal)
+        // Alerta visual dentro do sistema (Modal) - EXCLUSIVAMENTE para agendamentos CONFIRMADOS
         const activeAppointments = appointments.filter(apt => 
-            apt.companyId === user.companyId && 
-            (apt.status === 'Confirmado' || apt.status === 'Pendente') && 
+            String(apt.companyId || '').trim().toLowerCase() === String(user.companyId || '').trim().toLowerCase() && 
+            apt.status === 'Confirmado' && 
             apt.rawDate === todayStr
         );
 
@@ -1176,17 +1339,90 @@ const App: React.FC = () => {
     return () => clearInterval(intervalId);
   }, [appointments, appointmentAlertTime, triggeredAlerts, snoozedAlerts, user]);
 
-  const companyProducts = useMemo(() => user ? allProducts.filter(p => p.companyId === user.companyId) : [], [user, allProducts]);
-  const companySales = useMemo(() => user ? allSales.filter(s => s.companyId === user.companyId) : [], [user, allSales]);
-  const companyCategories = useMemo(() => user ? allCategories.filter(c => c.companyId === user.companyId) : [], [user, allCategories]);
-  const companyClients = useMemo(() => user ? allClients.filter(c => c.companyId === user.companyId) : [], [user, allClients]);
-  const companyProfessionals = useMemo(() => user ? allProfessionals.filter(p => p.companyId === user.companyId) : [], [user, allProfessionals]);
-  const companySpecialties = useMemo(() => user ? allSpecialties.filter(s => s.id !== '' && s.companyId === user.companyId) : [], [user, allSpecialties]);
-  const companyAppointments = useMemo(() => user ? appointments.filter(a => a.companyId === user.companyId) : [], [user, appointments]);
-  const companyActivePackages = useMemo(() => user ? activePackages.filter(p => p.companyId === user.companyId) : [], [user, activePackages]);
-  const companyQueue = useMemo(() => user ? queue.filter(q => q.companyId === user.companyId) : [], [user, queue]);
-  const companyPendingRedemptions = useMemo(() => user ? pendingRedemptions.filter(r => r.companyId === user.companyId) : [], [user, pendingRedemptions]);
-  const companyPromotions = useMemo(() => user ? promotions.filter(p => p.companyId === user.companyId) : [], [user, promotions]);
+  const effectiveCompanyId = currentCompany?.id || user?.companyId || '';
+  const targetComp = String(effectiveCompanyId).trim().toLowerCase();
+
+  const companyProducts = useMemo(() => {
+    if (!targetComp) return [];
+    return allProducts.filter(p => String(p.companyId || '').trim().toLowerCase() === targetComp);
+  }, [targetComp, allProducts]);
+
+  const companySales = useMemo(() => {
+    if (!targetComp) return [];
+    return allSales.filter(s => String(s.companyId || '').trim().toLowerCase() === targetComp);
+  }, [targetComp, allSales]);
+
+  const companyCategories = useMemo(() => {
+    if (!targetComp) return [];
+    return allCategories.filter(c => String(c.companyId || '').trim().toLowerCase() === targetComp);
+  }, [targetComp, allCategories]);
+
+  const companyClients = useMemo(() => {
+    if (!targetComp) return [];
+    return allClients.filter(c => String(c.companyId || '').trim().toLowerCase() === targetComp);
+  }, [targetComp, allClients]);
+
+  const companyProfessionals = useMemo(() => {
+    if (!targetComp) return [];
+    return allProfessionals.filter(p => String(p.companyId || '').trim().toLowerCase() === targetComp);
+  }, [targetComp, allProfessionals]);
+
+  const companySpecialties = useMemo(() => {
+    if (!targetComp) return [];
+    return allSpecialties.filter(s => s.id !== '' && String(s.companyId || '').trim().toLowerCase() === targetComp);
+  }, [targetComp, allSpecialties]);
+
+  const companyAppointments = useMemo(() => {
+    if (!targetComp) return [];
+    return appointments.filter(a => {
+      const aComp = String(a.companyId || '').trim().toLowerCase();
+      return aComp === targetComp || (!aComp && targetComp === '1');
+    });
+  }, [targetComp, appointments]);
+
+  const companyActivePackages = useMemo(() => {
+    if (!targetComp) return [];
+    return activePackages.filter(p => String(p.companyId || '').trim().toLowerCase() === targetComp);
+  }, [targetComp, activePackages]);
+
+  // Sincroniza dados da empresa com o servidor central para que clientes em smartphones recebam em tempo real
+  useEffect(() => {
+    if (!currentCompany || !effectiveCompanyId) return;
+    const syncDataWithServer = async () => {
+      try {
+        await fetch('/api/sync', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            companyId: effectiveCompanyId,
+            companies: [currentCompany],
+            products: companyProducts,
+            professionals: companyProfessionals,
+            appointments: companyAppointments,
+            clients: companyClients
+          })
+        });
+      } catch {
+        // Silencioso se offline
+      }
+    };
+    syncDataWithServer();
+  }, [currentCompany, effectiveCompanyId, companyProducts, companyProfessionals, companyAppointments, companyClients]);
+
+  const companyQueue = useMemo(() => {
+    if (!targetComp) return [];
+    return queue.filter(q => String(q.companyId || '').trim().toLowerCase() === targetComp);
+  }, [targetComp, queue]);
+
+  const companyPendingRedemptions = useMemo(() => {
+    if (!targetComp) return [];
+    return pendingRedemptions.filter(r => String(r.companyId || '').trim().toLowerCase() === targetComp);
+  }, [targetComp, pendingRedemptions]);
+
+  const companyPromotions = useMemo(() => {
+    if (!targetComp) return [];
+    return promotions.filter(p => String(p.companyId || '').trim().toLowerCase() === targetComp);
+  }, [targetComp, promotions]);
   const companyUsers = useMemo(() => {
     if (!user) return [];
     const cleanUser = (user?.username || '').toLowerCase().trim();
@@ -1707,18 +1943,35 @@ const App: React.FC = () => {
     }
   };
 
+  const handleDeleteAppointment = async (id: number | string) => {
+    markAptDeleted(id);
+    const updated = appointments.filter(a => String(a.id) !== String(id));
+    setAppointments(updated);
+    const remaining = db.appointments.getAll().filter(a => String(a.id) !== String(id));
+    db.appointments.save(remaining);
+
+    try {
+      await fetch(`/api/appointments/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    } catch (err) {
+      console.warn('Erro ao notificar exclusão ao servidor:', err);
+    }
+  };
+
   const handleConfirmAppointment = (id: number) => {
     const updated = appointments.map(apt => 
       apt.id === id ? { ...apt, status: 'Confirmado', canRemind: false } : apt
     );
     setAppointments(updated);
+    db.appointments.save(updated);
   };
 
   const handleStartAppointment = (id: number) => {
      if (!user) return;
-     setAppointments(prev => prev.map(apt => 
+     const updated = appointments.map(apt => 
         apt.id === id ? { ...apt, status: 'Em Andamento' } : apt
-     ));
+     );
+     setAppointments(updated);
+     db.appointments.save(updated);
 
      const apt = appointments.find(a => a.id === id);
      if (apt && apt.category && apt.category.toUpperCase().includes('PACOTE')) {
@@ -2265,9 +2518,13 @@ const App: React.FC = () => {
 
   // Public Smart Booking Route (Accessible directly via link without login)
   if (publicBookingCompanyId) {
+    const isTargetSameAsCurrent = currentCompany && String(currentCompany.id).trim().toLowerCase() === String(publicBookingCompanyId).trim().toLowerCase();
     return (
       <PublicBookingPage 
         companyId={publicBookingCompanyId} 
+        initialCompanyProp={isTargetSameAsCurrent ? currentCompany : undefined}
+        servicesProp={isTargetSameAsCurrent ? companyProducts.filter(p => p.type === 'SERVICE') : undefined}
+        professionalsProp={isTargetSameAsCurrent ? companyProfessionals : undefined}
         onExitPreview={() => {
           setPublicBookingCompanyId(null);
           if (typeof window !== 'undefined' && window.history) {
@@ -2275,7 +2532,7 @@ const App: React.FC = () => {
           }
         }}
         onAppointmentCreated={(newApt) => {
-          setAppointments(prev => [newApt, ...prev.filter(a => a.id !== newApt.id)]);
+          setAppointments(prev => [newApt, ...prev.filter(a => String(a.id) !== String(newApt.id))]);
         }}
       />
     );
@@ -2638,8 +2895,55 @@ const App: React.FC = () => {
 
         <main className="flex-1 overflow-y-auto p-6 md:p-10">
            {currentView === ViewState.DASHBOARD && (
-             /* Fix: Corrected prop name from isAutoReportMonth to isAutoReportDay to match DashboardHomeProps interface */
-             <DashboardHome products={companyProducts} categories={companyCategories} clients={companyClients} sales={companySales} appointments={companyAppointments} activePackages={companyActivePackages} queue={companyQueue} pixKey={pixKey} onConfirmPayment={handleConfirmPayment} onNewClient={() => { setEditingClient(null); setIsClientModalOpen(true); }} onNewAppointment={() => { setClientSelectorMode('APPOINTMENT'); setIsClientSelectorOpen(true); }} onOpenSmartScheduling={() => setIsSmartSchedulingModalOpen(true)} onUpdateAppointments={(newApts) => setAppointments(newApts)} onConfirmAppointment={handleConfirmAppointment} onStartAppointment={handleStartAppointment} onFinishSession={handleFinishSession} onOpenQueue={() => setIsQueueModalOpen(true)} onRemoveFromQueue={handleRemoveFromQueue} onPromoteQueueToAppointment={handlePromoteQueueToAppointment} getPackageInfo={getPackageInfo} pendingRedemptions={companyPendingRedemptions} onConfirmRedemption={handleConfirmRedemption} loyaltyEnabled={loyaltyEnabled} settings={{ openingTime, closingTime, interval: schedulingInterval }} onViewClientHistory={(c) => setHistoryClient(c)} onNewSale={() => { setClientSelectorMode('SALE'); setInitialCart([]); setIsClientSelectorOpen(true); }} stockEnabled={stockEnabled} stockWhatsApp={stockWhatsApp} onSendStockReport={handleSendManualStockReport} onReplenishStock={handleReplenishStock} reportedProductIds={reportedProductIds} storeEnabled={storeEnabled} isAutoReportDay={lastAutoReportMonth === new Date().getMonth() && stockReportDay === new Date().getDate()} onUpgradePlan={() => { setUser(null); setShowLandingPage(true); setTimeout(() => document.getElementById('planos')?.scrollIntoView({ behavior: 'smooth' }), 100); }} plan={currentCompany.plan} userPermissions={user.permissions} />
+             <DashboardHome 
+               products={companyProducts} 
+               categories={companyCategories} 
+               clients={companyClients} 
+               sales={companySales} 
+               appointments={companyAppointments} 
+               activePackages={companyActivePackages} 
+               queue={companyQueue} 
+               pixKey={pixKey} 
+               onConfirmPayment={handleConfirmPayment} 
+               onNewClient={() => { setEditingClient(null); setIsClientModalOpen(true); }} 
+               onNewAppointment={() => { setClientSelectorMode('APPOINTMENT'); setIsClientSelectorOpen(true); }} 
+               onOpenSmartScheduling={() => setIsSmartSchedulingModalOpen(true)} 
+               onUpdateAppointments={(newApts) => { 
+                 const newIds = new Set(newApts.map(a => String(a.id)));
+                 for (const oldApt of appointments) {
+                   if (!newIds.has(String(oldApt.id))) {
+                     markAptDeleted(oldApt.id);
+                     fetch(`/api/appointments/${encodeURIComponent(oldApt.id)}`, { method: 'DELETE' }).catch(() => {});
+                   }
+                 }
+                 setAppointments(newApts); 
+                 db.appointments.save(newApts); 
+               }} 
+               onDeleteAppointment={handleDeleteAppointment}
+               onConfirmAppointment={handleConfirmAppointment} 
+               onStartAppointment={handleStartAppointment} 
+               onFinishSession={handleFinishSession} 
+               onOpenQueue={() => setIsQueueModalOpen(true)} 
+               onRemoveFromQueue={handleRemoveFromQueue} 
+               onPromoteQueueToAppointment={handlePromoteQueueToAppointment} 
+               getPackageInfo={getPackageInfo} 
+               pendingRedemptions={companyPendingRedemptions} 
+               onConfirmRedemption={handleConfirmRedemption} 
+               loyaltyEnabled={loyaltyEnabled} 
+               settings={{ openingTime, closingTime, interval: schedulingInterval }} 
+               onViewClientHistory={(c) => setHistoryClient(c)} 
+               onNewSale={() => { setClientSelectorMode('SALE'); setInitialCart([]); setIsClientSelectorOpen(true); }} 
+               stockEnabled={stockEnabled} 
+               stockWhatsApp={stockWhatsApp} 
+               onSendStockReport={handleSendManualStockReport} 
+               onReplenishStock={handleReplenishStock} 
+               reportedProductIds={reportedProductIds} 
+               storeEnabled={storeEnabled} 
+               isAutoReportDay={lastAutoReportMonth === new Date().getMonth() && stockReportDay === new Date().getDate()} 
+               onUpgradePlan={() => { setUser(null); setShowLandingPage(true); setTimeout(() => document.getElementById('planos')?.scrollIntoView({ behavior: 'smooth' }), 100); }} 
+               plan={currentCompany.plan} 
+               userPermissions={user.permissions} 
+             />
            )}
            
            {currentView === ViewState.CALENDAR && (

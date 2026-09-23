@@ -136,10 +136,10 @@ export async function triggerSystemNotification(
   // Toca o som de alerta
   playNotificationSound();
 
-  const defaultOptions: NotificationOptions = {
+  const defaultOptions: any = {
     icon: 'https://ui-avatars.com/api/?name=Gendly&background=9333ea&color=ffffff',
     badge: 'https://ui-avatars.com/api/?name=G&background=9333ea&color=ffffff',
-    vibrate: [200, 100, 200, 100, 200] as any,
+    vibrate: [200, 100, 200, 100, 200],
     requireInteraction: true,
     ...options
   };
@@ -212,10 +212,12 @@ export function checkAndNotifyAppointments(
   const now = new Date();
   const todayStr = now.toLocaleDateString('en-CA'); // YYYY-MM-DD
 
-  // Filtra atendimentos de hoje para a empresa com status Confirmado ou Pendente
+  // REGRA ESTRITA: A notificação de início de atendimento só deve aparecer para cards
+  // que estão em próximos atendimentos de hoje e que estão CONFIRMADOS (apt.status === 'Confirmado').
+  // Caso não estejam confirmados (ex: Pendente, Agendado, Cancelado), não gera notificação!
   const todaysAppointments = appointments.filter(apt => 
-    apt.companyId === companyId && 
-    (apt.status === 'Confirmado' || apt.status === 'Pendente') && 
+    String(apt.companyId || '').trim().toLowerCase() === String(companyId || '').trim().toLowerCase() && 
+    apt.status === 'Confirmado' && 
     apt.rawDate === todayStr
   );
 

@@ -24,76 +24,32 @@ import { triggerSystemNotification } from '../services/notifications';
 
 interface PublicBookingPageProps {
   companyId: string;
+  initialCompanyProp?: Company;
+  servicesProp?: Product[];
+  professionalsProp?: Professional[];
   onExitPreview?: () => void;
   onAppointmentCreated?: (appointment: Appointment) => void;
 }
 
-// Fallback services in case company has no services configured yet
-const FALLBACK_SERVICES: Product[] = [
-  {
-    id: 'srv-fallback-1',
-    companyId: 'default',
-    name: 'Design de Sobrancelhas',
-    type: 'SERVICE',
-    category: 'Sobrancelha',
-    price: 45.00,
-    cost: 10.00,
-    duration: 30,
-    description: 'Design personalizado com alinhamento facial e acabamento de alta precisão.'
-  },
-  {
-    id: 'srv-fallback-2',
-    companyId: 'default',
-    name: 'Limpeza de Pele Profunda',
-    type: 'SERVICE',
-    category: 'Facial',
-    price: 120.00,
-    cost: 35.00,
-    duration: 60,
-    description: 'Higienização profunda, esfoliação, extração de cravos e máscara calmante.'
-  },
-  {
-    id: 'srv-fallback-3',
-    companyId: 'default',
-    name: 'Design de Sobrancelhas com Henna',
-    type: 'SERVICE',
-    category: 'Sobrancelha',
-    price: 65.00,
-    cost: 15.00,
-    duration: 45,
-    description: 'Preenchimento e definição com henna de alta durabilidade e fixação.'
-  },
-  {
-    id: 'srv-fallback-4',
-    companyId: 'default',
-    name: 'Massagem Facial Relaxante',
-    type: 'SERVICE',
-    category: 'Facial',
-    price: 80.00,
-    cost: 20.00,
-    duration: 40,
-    description: 'Massagem com ativos hidratantes para aliviar tensão e revitalizar a pele.'
-  }
-];
-
-const generateSlots = (start: string, end: string, intervalMinutes: number) => {
+const generateSlots = (start: string = '08:00', end: string = '19:00', intervalMinutes: number = 30): string[] => {
   const slots: string[] = [];
   try {
-    const [startH, startM] = (start || '08:00').split(':').map(Number);
-    const [endH, endM] = (end || '19:00').split(':').map(Number);
-    const interval = intervalMinutes && intervalMinutes > 0 ? intervalMinutes : 30;
+    const [startH, startM] = (start || '08:00').split(':').map(n => parseInt(n, 10) || 0);
+    const [endH, endM] = (end || '19:00').split(':').map(n => parseInt(n, 10) || 0);
+    const interval = Math.max(15, parseInt(String(intervalMinutes), 10) || 30);
 
-    let current = new Date();
-    current.setHours(isNaN(startH) ? 8 : startH, isNaN(startM) ? 0 : startM, 0, 0);
+    const startTotal = (isNaN(startH) ? 8 : startH) * 60 + (isNaN(startM) ? 0 : startM);
+    let endTotal = (isNaN(endH) ? 19 : endH) * 60 + (isNaN(endM) ? 0 : endM);
+    
+    if (endTotal <= startTotal) {
+      endTotal = Math.min(23 * 60 + 45, startTotal + 10 * 60);
+    }
 
-    const finish = new Date();
-    finish.setHours(isNaN(endH) ? 19 : endH, isNaN(endM) ? 0 : endM, 0, 0);
-
-    while (current <= finish) {
-      const h = String(current.getHours()).padStart(2, '0');
-      const m = String(current.getMinutes()).padStart(2, '0');
+    for (let cur = startTotal; cur <= endTotal; cur += interval) {
+      const h = String(Math.floor(cur / 60)).padStart(2, '0');
+      const m = String(cur % 60).padStart(2, '0');
       slots.push(`${h}:${m}`);
-      current.setMinutes(current.getMinutes() + interval);
+      if (slots.length >= 60) break;
     }
   } catch (err) {
     console.error('Erro ao gerar horários:', err);
@@ -103,24 +59,90 @@ const generateSlots = (start: string, end: string, intervalMinutes: number) => {
 
 export const PublicBookingPage: React.FC<PublicBookingPageProps> = ({ 
   companyId, 
+  initialCompanyProp,
+  servicesProp,
+  professionalsProp,
   onExitPreview,
   onAppointmentCreated 
 }) => {
-  // Resolve Target Company immediately without blocking spinner
+  // Resolve Target Company strictly matching the companyId without cross-company leakage
   const initialCompany = useMemo(() => {
+    if (initialCompanyProp) {
+      return initialCompanyProp;
+    }
     try {
       const companies = db.companies.getAll();
-      const cleanId = (companyId || '').trim();
-      const match = companies.find(c => 
-        c.id === cleanId || 
-        c.id === decodeURIComponent(cleanId) ||
-        c.name.toLowerCase().includes(cleanId.toLowerCase())
-      );
-      if (match) return match;
+      let raw = (companyId || '').trim();
+      if (raw.includes('?')) raw = raw.split('?')[0];
+      if (raw.includes('&')) raw = raw.split('&')[0];
+      if (raw.includes('#')) raw = raw.split('#')[0];
+      const clean = decodeURIComponent(raw).trim();
+
+      if (clean) {
+        // 1. Exact ID match (case-sensitive or insensitive)
+        const exact = companies.find(c => String(c.id).trim().toLowerCase() === clean.toLowerCase());
+        if (exact) return exact;
+
+        // 2. Tax ID / CNPJ match
+        const cleanTax = clean.replace(/\D/g, '');
+        if (cleanTax.length >= 8) {
+          const taxMatch = companies.find(c => String(c.taxId || '').replace(/\D/g, '') === cleanTax);
+          if (taxMatch) return taxMatch;
+        }
+
+        // 3. Name exact match
+        const nameMatch = companies.find(c => c.name.trim().toLowerCase() === clean.toLowerCase());
+        if (nameMatch) return nameMatch;
+
+        // 4. Check if a user with this companyId exists in the database
+        const users = db.users.getAll();
+        const matchedUser = users.find(u => String(u.companyId).trim().toLowerCase() === clean.toLowerCase());
+        if (matchedUser) {
+          return {
+            id: matchedUser.companyId,
+            name: matchedUser.name || 'Minha Empresa',
+            subName: 'Estética & Beleza',
+            logo: `https://ui-avatars.com/api/?name=${encodeURIComponent(matchedUser.name || 'Empresa')}&background=7e22ce&color=ffffff`,
+            taxId: '',
+            businessType: 'PJ',
+            plan: 'PREMIUM',
+            neverExpires: true
+          };
+        }
+
+        // 5. If specific clean ID was provided, keep this EXACT companyId so data is never sent to another business
+        return {
+          id: clean,
+          name: clean.charAt(0).toUpperCase() + clean.slice(1).replace(/[-_]/g, ' '),
+          subName: 'Agendamento Online',
+          logo: `https://ui-avatars.com/api/?name=${encodeURIComponent(clean)}&background=7e22ce&color=ffffff`,
+          taxId: '',
+          businessType: 'PJ',
+          plan: 'PREMIUM',
+          neverExpires: true
+        };
+      }
+
+      // Se nenhum ID foi fornecido na URL, verifica se existe sessão ativa salva
+      try {
+        const activeSession = localStorage.getItem('gendly_active_session');
+        if (activeSession) {
+          const parsed = JSON.parse(activeSession);
+          if (parsed && parsed.companyId) {
+            const userComp = companies.find(c => String(c.id).trim().toLowerCase() === String(parsed.companyId).trim().toLowerCase());
+            if (userComp) return userComp;
+          }
+        }
+      } catch {}
+
+      // Apenas se totalmente vazio, padrão seguro
       return companies[0] || {
-        id: cleanId || 'studio-alana-moreira',
+        id: 'studio-alana-moreira',
         name: 'Studio Alana Moreira',
         subName: 'Estética & Beleza Especializada',
+        logo: 'https://ui-avatars.com/api/?name=Alana+Moreira&background=fdf4ff&color=9333ea',
+        taxId: '12.345.678/0001-99',
+        businessType: 'PJ',
         plan: 'PREMIUM',
         neverExpires: true
       };
@@ -129,13 +151,16 @@ export const PublicBookingPage: React.FC<PublicBookingPageProps> = ({
         id: companyId || 'studio-alana-moreira',
         name: 'Studio Alana Moreira',
         subName: 'Estética & Beleza Especializada',
+        logo: 'https://ui-avatars.com/api/?name=Alana+Moreira&background=fdf4ff&color=9333ea',
+        taxId: '12.345.678/0001-99',
+        businessType: 'PJ',
         plan: 'PREMIUM',
         neverExpires: true
       };
     }
-  }, [companyId]);
+  }, [companyId, initialCompanyProp]);
 
-  const activeCompanyId = initialCompany.id;
+  const activeCompanyId = String(initialCompany.id).trim();
 
   const [company, setCompany] = useState<Company>(initialCompany);
   const [settings, setSettings] = useState<CompanySettings | null>(() => {
@@ -146,37 +171,55 @@ export const PublicBookingPage: React.FC<PublicBookingPageProps> = ({
     }
   });
 
+  // CARREGAR ESTRITAMENTE OS SERVIÇOS CADASTRADOS NA EMPRESA QUE MANDOU O LINK
   const [services, setServices] = useState<Product[]>(() => {
+    if (servicesProp && servicesProp.length > 0) {
+      return servicesProp.filter(p => p.type === 'SERVICE' && String(p.companyId || '').trim().toLowerCase() === activeCompanyId.toLowerCase());
+    }
     try {
       const allProds = db.products.getAll();
-      const filtered = allProds.filter(p => (p.companyId === activeCompanyId || p.companyId === 'studio-alana-moreira') && p.type === 'SERVICE');
-      return filtered.length > 0 ? filtered : FALLBACK_SERVICES;
+      return allProds.filter(p => 
+        String(p.companyId || '').trim().toLowerCase() === activeCompanyId.toLowerCase() && 
+        p.type === 'SERVICE'
+      );
     } catch {
-      return FALLBACK_SERVICES;
+      return [];
     }
   });
 
+  // CARREGAR ESTRITAMENTE OS PROFISSIONAIS CADASTRADOS NA EMPRESA QUE MANDOU O LINK
   const [professionals, setProfessionals] = useState<Professional[]>(() => {
+    if (professionalsProp && professionalsProp.length > 0) {
+      return professionalsProp.filter(p => String(p.companyId || '').trim().toLowerCase() === activeCompanyId.toLowerCase());
+    }
     try {
       const allProfs = db.professionals.getAll();
-      const filtered = allProfs.filter(p => p.companyId === activeCompanyId || p.companyId === 'studio-alana-moreira');
-      return filtered.length > 0 ? filtered : allProfs;
+      return allProfs.filter(p => 
+        String(p.companyId || '').trim().toLowerCase() === activeCompanyId.toLowerCase()
+      );
     } catch {
       return [];
     }
   });
 
+  // CARREGAR APENAS OS AGENDAMENTOS DA EMPRESA ESPECÍFICA
   const [appointments, setAppointments] = useState<Appointment[]>(() => {
     try {
-      return db.appointments.getAll().filter(a => a.companyId === activeCompanyId);
+      return db.appointments.getAll().filter(a => 
+        String(a.companyId || '').trim().toLowerCase() === activeCompanyId.toLowerCase()
+      );
     } catch {
       return [];
     }
   });
 
+  // PROMOÇÕES DA EMPRESA ESPECÍFICA
   const [promotions, setPromotions] = useState<Promotion[]>(() => {
     try {
-      return db.promotions.getAll().filter(p => p.companyId === activeCompanyId && p.active);
+      return db.promotions.getAll().filter(p => 
+        String(p.companyId || '').trim().toLowerCase() === activeCompanyId.toLowerCase() && 
+        p.active
+      );
     } catch {
       return [];
     }
@@ -187,12 +230,30 @@ export const PublicBookingPage: React.FC<PublicBookingPageProps> = ({
     return services.length > 0 ? services[0].id : '';
   });
 
+  // CASO SÓ TENHA UM ÚNICO PROFISSIONAL, SELECIONAR COMO PADRÃO AUTOMATICAMENTE
   const [selectedProfessional, setSelectedProfessional] = useState<string>(() => {
     if (professionals.length === 1) {
       return professionals[0].nickname || professionals[0].name;
     }
     return '';
   });
+
+  // Sincronizar seleção padrão se lista de profissionais atualizar (caso tenha apenas um único profissional, seleciona como padrão)
+  useEffect(() => {
+    if (professionals.length === 1) {
+      const defProf = professionals[0].nickname || professionals[0].name;
+      setSelectedProfessional(defProf);
+    } else if (professionals.length > 1 && !selectedProfessional) {
+      // Deixar aberto para o cliente escolher entre os cadastrados
+    }
+  }, [professionals, selectedProfessional]);
+
+  // Sincronizar primeiro serviço se lista de serviços atualizar
+  useEffect(() => {
+    if (services.length > 0 && (!selectedServiceId || !services.some(s => s.id === selectedServiceId))) {
+      setSelectedServiceId(services[0].id);
+    }
+  }, [services, selectedServiceId]);
 
   // Calendar dates (Next 14 days)
   const availableDates = useMemo(() => {
@@ -238,43 +299,123 @@ export const PublicBookingPage: React.FC<PublicBookingPageProps> = ({
   // Sync data in real-time
   const refreshAppointments = useCallback(() => {
     try {
-      const freshApts = db.appointments.getAll().filter(a => a.companyId === activeCompanyId);
+      const freshApts = db.appointments.getAll().filter(a => 
+        String(a.companyId || '').trim().toLowerCase() === activeCompanyId.toLowerCase()
+      );
       setAppointments(freshApts);
     } catch {
       // ignore
     }
   }, [activeCompanyId]);
 
+  // Sincronizar dados em tempo real com o servidor central (suporte para múltiplos navegadores e smartphones)
   useEffect(() => {
-    const unsubscribe = onDatabaseChange((key) => {
-      if (
-        key === DB_TABLES.APPOINTMENTS || 
-        key === 'gendly_appointments' ||
-        key === DB_TABLES.PRODUCTS ||
-        key === DB_TABLES.SETTINGS ||
-        key === DB_TABLES.PROFESSIONALS
-      ) {
-        setLiveSyncPulse(true);
-        setTimeout(() => setLiveSyncPulse(false), 800);
-        refreshAppointments();
+    let isMounted = true;
+    const fetchLiveBookingData = async () => {
+      try {
+        const res = await fetch(`/api/companies/${encodeURIComponent(activeCompanyId)}/booking-data`);
+        if (res.ok) {
+          const data = await res.json();
+          if (!isMounted) return;
+          if (data.company && data.company.name) {
+            setCompany(prev => ({ ...prev, ...data.company }));
+          }
+          if (Array.isArray(data.services)) {
+            setServices(data.services);
+          }
+          if (Array.isArray(data.professionals)) {
+            setProfessionals(data.professionals);
+            if (data.professionals.length === 1) {
+              const defProf = data.professionals[0].nickname || data.professionals[0].name;
+              setSelectedProfessional(defProf);
+            }
+          }
+          if (Array.isArray(data.busySlots)) {
+            // Mapeia horários já ocupados para bloquear no calendário
+            setAppointments(data.busySlots.map((s: any, idx: number) => ({
+              id: 990000 + idx,
+              companyId: activeCompanyId,
+              time: s.time,
+              rawDate: s.rawDate,
+              date: '',
+              weekday: '',
+              client: 'Horário Reservado',
+              phone: '',
+              service: 'Reservado',
+              professional: s.professional,
+              status: 'Agendado'
+            } as Appointment)));
+          }
+        }
+      } catch (err) {
+        // Fallback gracioso caso offline
+      }
+    };
+
+    fetchLiveBookingData();
+    const pollTimer = setInterval(fetchLiveBookingData, 4000);
+    return () => {
+      isMounted = false;
+      clearInterval(pollTimer);
+    };
+  }, [activeCompanyId]);
+
+  useEffect(() => {
+    const unsubscribe = onDatabaseChange((key, data) => {
+      if (key === DB_TABLES.APPOINTMENTS || key === 'gendly_appointments') {
+        if (Array.isArray(data)) {
+          setAppointments(data.filter(a => String(a.companyId || '').trim().toLowerCase() === activeCompanyId.toLowerCase()));
+        } else {
+          refreshAppointments();
+        }
+      }
+      if (key === DB_TABLES.PROFESSIONALS || key === 'gendly_professionals') {
+        const list = Array.isArray(data) ? data : db.professionals.getAll();
+        const freshProfs = list.filter(p => String(p.companyId || '').trim().toLowerCase() === activeCompanyId.toLowerCase());
+        setProfessionals(freshProfs);
+        if (freshProfs.length === 1) {
+          setSelectedProfessional(freshProfs[0].nickname || freshProfs[0].name);
+        }
+      }
+      if (key === DB_TABLES.PRODUCTS || key === 'gendly_products') {
+        const list = Array.isArray(data) ? data : db.products.getAll();
+        const freshProds = list.filter(p => 
+          String(p.companyId || '').trim().toLowerCase() === activeCompanyId.toLowerCase() && 
+          p.type === 'SERVICE'
+        );
+        setServices(freshProds);
       }
     });
 
-    // Polling every 2.5s guarantees instant updates across multiple tabs/browsers
-    const interval = setInterval(refreshAppointments, 2500);
-
     return () => {
       unsubscribe();
-      clearInterval(interval);
     };
-  }, [refreshAppointments]);
+  }, [activeCompanyId, refreshAppointments]);
 
-  // If professionals length updates and only 1 exists, auto-select
-  useEffect(() => {
-    if (professionals.length === 1 && !selectedProfessional) {
-      setSelectedProfessional(professionals[0].nickname || professionals[0].name);
+  // Ações de fluxo rápidas e sem travamento
+  const handleSelectService = (srvId: string) => {
+    setSelectedServiceId(srvId);
+    // Se a empresa possui apenas 1 profissional (ou nenhum cadastrado), seleciona como padrão e segue direto para Data e Horário (Passo 3)
+    if (professionals.length <= 1) {
+      if (professionals.length === 1) {
+        setSelectedProfessional(professionals[0].nickname || professionals[0].name);
+      }
+      setStep(3);
+    } else {
+      // Se houver 2 ou mais profissionais, abre o Passo 2 para o cliente escolher
+      setStep(2);
     }
-  }, [professionals, selectedProfessional]);
+  };
+
+  const handleSelectProfessional = (profName: string) => {
+    setSelectedProfessional(profName);
+    setStep(3);
+  };
+
+  const handleSelectTime = (timeStr: string) => {
+    setSelectedTime(timeStr);
+    setStep(4);
+  };
 
   // Selected Service Details
   const currentService = useMemo(() => {
@@ -373,18 +514,22 @@ export const PublicBookingPage: React.FC<PublicBookingPageProps> = ({
 
       // 3. Resolve Professional
       let finalProfName = selectedProfessional;
-      let profAvatar = 'https://ui-avatars.com/api/?name=Profissional&background=e9d5ff&color=7e22ce';
+      let profAvatar = '';
 
       if (!finalProfName && professionals.length > 0) {
         finalProfName = professionals[0].nickname || professionals[0].name;
-        profAvatar = professionals[0].avatar || profAvatar;
+        profAvatar = professionals[0].avatar || '';
       } else if (finalProfName) {
         const pObj = professionals.find(p => (p.nickname || p.name) === finalProfName);
         if (pObj) {
-          profAvatar = pObj.avatar || profAvatar;
+          profAvatar = pObj.avatar || '';
         }
-      } else {
-        finalProfName = 'Equipe Studio';
+      }
+      if (!finalProfName) {
+        finalProfName = 'Profissional Cadastrado';
+      }
+      if (!profAvatar) {
+        profAvatar = `https://ui-avatars.com/api/?name=${encodeURIComponent(finalProfName)}&background=f3e8ff&color=9333ea`;
       }
 
       // 4. Save/Update Client in database
@@ -395,6 +540,7 @@ export const PublicBookingPage: React.FC<PublicBookingPageProps> = ({
         name: clientName.trim(),
         nickname: clientNickname.trim() || clientName.trim().split(' ')[0],
         whatsapp: clientWhatsapp.trim(),
+        birthday: '',
         avatar: `https://ui-avatars.com/api/?name=${encodeURIComponent(clientName.trim())}&background=f3e8ff&color=9333ea`
       };
       db.clients.upsert(clientRecord);
@@ -402,27 +548,40 @@ export const PublicBookingPage: React.FC<PublicBookingPageProps> = ({
       // 5. Create Appointment with status 'Pendente' (Appears in "Próximos Atendimentos")
       const newAppointment: Appointment = {
         id: Date.now(),
-        companyId: activeCompanyId,
+        companyId: String(activeCompanyId).trim(),
         time: selectedTime,
         date: formattedDateBR,
         rawDate: selectedDate,
         weekday: weekdayShort,
         client: clientRecord.name,
+        clientNickname: clientRecord.nickname,
         clientId: clientRecord.id,
-        avatar: clientRecord.avatar,
+        avatar: clientRecord.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(clientRecord.name)}&background=f3e8ff&color=9333ea`,
         phone: clientRecord.whatsapp,
         service: currentService.name,
         professional: finalProfName,
         professionalAvatar: profAvatar,
-        status: 'Pendente', // Goes straight to "Próximos Atendimentos" to be confirmed/reminded/rescheduled/deleted
+        status: 'Pendente', // Goes straight to "Próximos Atendimentos"
+        canRemind: true,
         price: effectivePrice,
         cost: currentService.cost || 0,
         category: currentService.category || 'Geral',
         notes: clientNotes ? `[Agendado Online]: ${clientNotes}` : '[Agendado pelo Link Exclusivo Online]'
       };
 
-      // Save to database
+      // Save to local database
       db.appointments.create(newAppointment);
+
+      // Sincroniza imediatamente com o servidor central para notificar o painel do administrador em tempo real
+      try {
+        fetch('/api/appointments', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(newAppointment)
+        }).catch(err => console.warn('[Booking Sync] Servidor offline ou inacessível:', err));
+      } catch (err) {
+        // Silencioso se offline
+      }
 
       // Update local state
       setAppointments(prev => [newAppointment, ...prev]);
@@ -604,10 +763,7 @@ export const PublicBookingPage: React.FC<PublicBookingPageProps> = ({
                 return (
                   <div
                     key={srv.id}
-                    onClick={() => {
-                      setSelectedServiceId(srv.id);
-                      setTimeout(() => setStep(2), 150);
-                    }}
+                    onClick={() => handleSelectService(srv.id)}
                     className={`p-4 rounded-2xl border transition-all cursor-pointer relative flex flex-col justify-between ${
                       isSelected 
                         ? 'bg-purple-50/90 border-purple-500 ring-2 ring-purple-400 shadow-md' 
@@ -657,7 +813,8 @@ export const PublicBookingPage: React.FC<PublicBookingPageProps> = ({
             {services.length === 0 && (
               <div className="bg-white p-8 rounded-2xl border border-gray-200 text-center text-gray-500">
                 <Scissors size={40} className="mx-auto mb-2 text-gray-300" />
-                <p className="font-bold">Nenhum serviço disponível no momento.</p>
+                <p className="font-bold text-gray-800">Nenhum serviço disponível no momento.</p>
+                <p className="text-xs text-gray-400 mt-1">Não há serviços cadastrados para esta empresa.</p>
               </div>
             )}
           </div>
@@ -671,8 +828,8 @@ export const PublicBookingPage: React.FC<PublicBookingPageProps> = ({
                 <h2 className="text-2xl font-black text-gray-900 mb-1">Escolha o Profissional</h2>
                 <p className="text-sm text-gray-500">
                   {professionals.length === 1 
-                    ? 'Profissional especialista já selecionado para seu atendimento.' 
-                    : 'Selecione quem você prefere ou escolha "Qualquer Profissional".'}
+                    ? 'Profissional único cadastrado selecionado por padrão.' 
+                    : 'Selecione o profissional cadastrado para o seu atendimento.'}
                 </p>
               </div>
               <button 
@@ -683,6 +840,16 @@ export const PublicBookingPage: React.FC<PublicBookingPageProps> = ({
                 <ArrowLeft size={14} /> Trocar serviço
               </button>
             </div>
+
+            {/* Notice if single professional */}
+            {professionals.length === 1 && (
+              <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl flex items-center gap-2.5 text-xs text-emerald-800 font-medium">
+                <CheckCircle2 size={16} className="text-emerald-600 shrink-0" />
+                <span>
+                  Profissional único cadastrado <strong>{professionals[0].nickname || professionals[0].name}</strong> selecionado por padrão.
+                </span>
+              </div>
+            )}
 
             {/* Selected Service Badge */}
             {currentService && (
@@ -696,41 +863,14 @@ export const PublicBookingPage: React.FC<PublicBookingPageProps> = ({
             )}
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
-              {/* Option: Any Professional */}
-              {professionals.length > 1 && (
-                <div
-                  onClick={() => {
-                    setSelectedProfessional('');
-                    setTimeout(() => setStep(3), 150);
-                  }}
-                  className={`p-4 rounded-2xl border transition-all cursor-pointer flex items-center gap-3.5 ${
-                    selectedProfessional === '' 
-                      ? 'bg-purple-50/90 border-purple-500 ring-2 ring-purple-400 shadow-md' 
-                      : 'bg-white border-gray-200 hover:border-purple-300'
-                  }`}
-                >
-                  <div className="w-12 h-12 rounded-full bg-gradient-to-tr from-purple-500 to-pink-500 text-white flex items-center justify-center font-black text-sm shrink-0">
-                    <Sparkles size={20} />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <h3 className="font-bold text-gray-900 text-sm leading-tight">Qualquer Profissional</h3>
-                    <p className="text-xs text-gray-400 mt-0.5">Primeiro horário livre disponível</p>
-                  </div>
-                  {selectedProfessional === '' && <Check size={18} className="text-purple-600" />}
-                </div>
-              )}
-
-              {/* Real Registered Professionals */}
+              {/* Apenas profissionais cadastrados no sistema */}
               {professionals.map(prof => {
                 const profName = prof.nickname || prof.name;
                 const isSelected = selectedProfessional === profName;
                 return (
                   <div
                     key={prof.id}
-                    onClick={() => {
-                      setSelectedProfessional(profName);
-                      setTimeout(() => setStep(3), 150);
-                    }}
+                    onClick={() => handleSelectProfessional(profName)}
                     className={`p-4 rounded-2xl border transition-all cursor-pointer flex items-center gap-3.5 ${
                       isSelected 
                         ? 'bg-purple-50/90 border-purple-500 ring-2 ring-purple-400 shadow-md' 
@@ -746,15 +886,23 @@ export const PublicBookingPage: React.FC<PublicBookingPageProps> = ({
                       <div className="flex items-center gap-1.5">
                         <h3 className="font-bold text-gray-900 text-sm leading-tight truncate">{profName}</h3>
                         {professionals.length === 1 && (
-                          <span className="text-[9px] bg-purple-100 text-purple-700 px-1.5 py-0.2 rounded font-bold">Padrão</span>
+                          <span className="text-[9px] bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded font-bold">Padrão</span>
                         )}
                       </div>
-                      <p className="text-xs text-gray-400 mt-0.5 truncate">{prof.specialty || 'Especialista'}</p>
+                      <p className="text-xs text-gray-400 mt-0.5 truncate">{prof.specialty || 'Profissional Cadastrado'}</p>
                     </div>
                     {isSelected && <Check size={18} className="text-purple-600" />}
                   </div>
                 );
               })}
+
+              {professionals.length === 0 && (
+                <div className="col-span-full bg-white p-6 rounded-2xl border border-gray-200 text-center text-gray-500 text-xs">
+                  <User size={32} className="mx-auto mb-2 text-gray-300" />
+                  <p className="font-bold text-gray-800">Nenhum profissional cadastrado</p>
+                  <p className="mt-1">Não há profissionais cadastrados para esta empresa no momento.</p>
+                </div>
+              )}
             </div>
 
             <div className="flex justify-between pt-4">
@@ -767,7 +915,13 @@ export const PublicBookingPage: React.FC<PublicBookingPageProps> = ({
               </button>
               <button
                 type="button"
-                onClick={() => setStep(3)}
+                onClick={() => {
+                  if (professionals.length === 1) {
+                    handleSelectProfessional(professionals[0].nickname || professionals[0].name);
+                  } else {
+                    setStep(3);
+                  }
+                }}
                 className="px-6 py-2.5 rounded-xl bg-purple-600 text-white font-bold text-xs hover:bg-purple-700 transition-colors shadow-sm"
               >
                 Continuar para Data e Hora
@@ -786,11 +940,26 @@ export const PublicBookingPage: React.FC<PublicBookingPageProps> = ({
               </div>
               <button 
                 type="button"
-                onClick={() => setStep(2)} 
+                onClick={() => setStep(professionals.length > 1 ? 2 : 1)} 
                 className="text-xs font-bold text-purple-600 hover:underline flex items-center gap-1"
               >
-                <ArrowLeft size={14} /> Alterar profissional
+                <ArrowLeft size={14} /> {professionals.length > 1 ? 'Alterar profissional' : 'Alterar serviço'}
               </button>
+            </div>
+
+            {/* Selected Summary pill */}
+            <div className="p-3 bg-purple-50/70 border border-purple-200 rounded-xl flex items-center justify-between text-xs">
+              <div className="flex items-center gap-2">
+                <Scissors size={14} className="text-purple-600" />
+                <span className="font-bold text-gray-900">{currentService?.name}</span>
+                {selectedProfessional && (
+                  <>
+                    <span className="text-gray-300">•</span>
+                    <span className="text-purple-700 font-semibold">{selectedProfessional}</span>
+                  </>
+                )}
+              </div>
+              <span className="font-black text-purple-700">R$ {effectivePrice.toFixed(2)}</span>
             </div>
 
             {/* Horizontal Date Picker */}
@@ -862,10 +1031,7 @@ export const PublicBookingPage: React.FC<PublicBookingPageProps> = ({
                       <button
                         key={timeStr}
                         type="button"
-                        onClick={() => {
-                          setSelectedTime(timeStr);
-                          setTimeout(() => setStep(4), 150);
-                        }}
+                        onClick={() => handleSelectTime(timeStr)}
                         className={`p-3 rounded-xl border text-center text-xs font-black transition-all ${
                           isSelected
                             ? 'bg-purple-600 text-white border-purple-600 shadow-md shadow-purple-200 scale-105'
@@ -887,7 +1053,7 @@ export const PublicBookingPage: React.FC<PublicBookingPageProps> = ({
             <div className="flex justify-between pt-4">
               <button
                 type="button"
-                onClick={() => setStep(2)}
+                onClick={() => setStep(professionals.length > 1 ? 2 : 1)}
                 className="px-5 py-2.5 rounded-xl border border-gray-200 text-gray-600 font-bold text-xs hover:bg-gray-100 transition-colors"
               >
                 Voltar
@@ -1086,7 +1252,7 @@ export const PublicBookingPage: React.FC<PublicBookingPageProps> = ({
               <button
                 type="button"
                 onClick={openWhatsAppConfirmation}
-                className="w-full py-3.5 bg-emerald-500 hover:bg-emerald-600 text-white rounded-2xl font-bold text-sm shadow-md shadow-emerald-200 flex items-center justify-center gap-2 transition-all"
+                className="w-full py-3.5 bg-emerald-500 hover:bg-emerald-600 text-white rounded-2xl font-bold text-sm shadow-md shadow-emerald-200 flex items-center justify-center gap-2 transition-all cursor-pointer"
               >
                 <MessageCircle size={18} />
                 Enviar Confirmação pelo WhatsApp
@@ -1099,7 +1265,7 @@ export const PublicBookingPage: React.FC<PublicBookingPageProps> = ({
                   setSelectedTime('');
                   setStep(1);
                 }}
-                className="w-full py-3 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-2xl font-bold text-xs transition-colors"
+                className="w-full py-3 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-2xl font-bold text-xs transition-colors cursor-pointer"
               >
                 Fazer Outro Agendamento
               </button>

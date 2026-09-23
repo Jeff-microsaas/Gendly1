@@ -18,6 +18,9 @@ export interface Product {
   quantity: number;
   minQuantity?: number; 
   categoryId?: string; 
+  category?: string;
+  cost?: number;
+  duration?: number;
   image: string | null; 
   sku: string;
   companyId: string; 
@@ -151,6 +154,8 @@ export interface Appointment {
   weekday: string;
   client: string; 
   clientNickname?: string; 
+  clientId?: string;
+  phone?: string;
   avatar: string;
   professional: string;
   professionalAvatar: string;
@@ -158,6 +163,9 @@ export interface Appointment {
   category: string;
   status: string;
   canRemind: boolean;
+  price?: number;
+  cost?: number;
+  notes?: string;
   isReward?: boolean;
   discountApplied?: number; 
 }
@@ -191,11 +199,36 @@ export interface LoyaltyRedemption {
 
 export interface Promotion {
   id: string;
-  companyId: string;
-  itemId: string; 
-  itemType: 'SERVICE' | 'PACKAGE' | 'PRODUCT';
-  promoPrice: number;
-  expiryDate: string;
-  targetClientIds: string[]; 
+  companyId: string; 
+  itemId?: string; 
+  serviceId?: string;
+  itemType?: 'SERVICE' | 'PACKAGE' | 'PRODUCT';
+  promoPrice?: number;
+  promotionalPrice?: number;
+  expiryDate?: string;
+  targetClientIds?: string[]; 
   active: boolean;
+}
+
+export interface CompanySettings {
+  companyName?: string;
+  phone?: string;
+  address?: string;
+  instagram?: string;
+  openingTime?: string;
+  closingTime?: string;
+  interval?: number;
+  financialEnabled?: boolean;
+  loyaltyEnabled?: boolean;
+  promotionsEnabled?: boolean;
+  storeEnabled?: boolean;
+  stockEnabled?: boolean;
+  companyUsersEnabled?: boolean;
+  stockWhatsApp?: string;
+  stockReportDay?: number;
+  loyaltyServiceGoal?: number;
+  reminderEnabled?: boolean;
+  lowStockAlert?: boolean;
+  birthdayAlert?: boolean;
+  [key: string]: any;
 }

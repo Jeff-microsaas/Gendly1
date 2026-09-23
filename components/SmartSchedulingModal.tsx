@@ -34,8 +34,9 @@ export const SmartSchedulingModal: React.FC<SmartSchedulingModalProps> = ({
 
   const getBookingUrl = () => {
     if (typeof window === 'undefined') return '';
-    const base = window.location.origin + window.location.pathname;
-    return `${base}?agendamento=${company.id}`;
+    const origin = window.location.origin;
+    const cleanPath = window.location.pathname.replace(/\/+$/, '');
+    return `${origin}${cleanPath}/?agendamento=${encodeURIComponent(company.id)}`;
   };
 
   const bookingUrl = getBookingUrl();
